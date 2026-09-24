@@ -7,3 +7,12 @@ __pycache__/
 node_modules/
 dist/
 build/
+
+# Model artifacts are fetched/converted at build time, never committed
+models/*
+!models/README.md
+secrets/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/

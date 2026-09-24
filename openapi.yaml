@@ -1,33 +1,606 @@
 openapi: 3.1.0
 info:
   title: Codestra Face Liveness API
-  version: 0.1.0
-  description: Standalone Codestra service. Cross-system access is mediated by Middleware V3.
+  description: 'Standalone passive presentation-attack-detection (PAD) service for Codestra FACE-ID. It
+    answers one question: is the single face in this image a bona fide live capture or a presentation
+    attack (print, screen replay, mask)? It does NOT perform face matching or identity verification. The
+    only supported caller is Middleware V3, which owns authentication normalisation, policy, orchestration
+    and cross-system audit. Images are processed in memory and never persisted.'
+  version: 0.2.0
 servers:
-  - url: http://localhost
+- url: http://localhost:8080
+  description: Local development
 paths:
   /healthz:
     get:
+      tags:
+      - operations
+      summary: Healthz
+      description: Liveness of the process itself. Does not check the model.
       operationId: health
       responses:
-        "200":
-          description: Healthy
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
   /readyz:
     get:
+      tags:
+      - operations
+      summary: Readyz
+      description: Ready only when models are loaded + digest-verified and auth is configured.
       operationId: ready
       responses:
-        "200":
-          description: Ready
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+        '503':
+          description: Not ready (fail closed)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+  /health/ready:
+    get:
+      tags:
+      - operations
+      summary: Readyz
+      description: Ready only when models are loaded + digest-verified and auth is configured.
+      operationId: healthReadyAlias
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+  /metrics:
+    get:
+      tags:
+      - operations
+      summary: Prometheus Metrics
+      description: Prometheus metrics in text exposition format.
+      operationId: metrics
+      responses:
+        '200':
+          description: Prometheus exposition
+          content:
+            text/plain: {}
   /v1/capabilities:
     get:
+      tags:
+      - liveness
+      summary: Capabilities
+      description: What this service can and cannot do, its limits, and its decision policy.
       operationId: capabilities
       responses:
-        "200":
-          description: Service capabilities
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CapabilitiesResponse'
+        '401':
+          description: 'Error codes: UNAUTHORIZED'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /v1/liveness/status:
     get:
+      tags:
+      - liveness
+      summary: Status
+      description: Service-local status summary.
       operationId: serviceStatus
       responses:
-        "200":
-          description: Service-local status
-components: {}
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '401':
+          description: 'Error codes: UNAUTHORIZED'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/liveness/check:
+    post:
+      tags:
+      - liveness
+      summary: Check Liveness
+      description: 'Passive single-image liveness check.
+
+
+        A `200` response is a completed assessment: `decision` is `live` or `spoof`.
+
+        Any non-2xx response means **no assessment was made** and the caller must treat
+
+        the subject as not verified (fail closed). `spoof` is a normal 200 outcome, not
+
+        an error.'
+      operationId: checkLiveness
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LivenessCheckRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LivenessCheckResponse'
+        '400':
+          description: 'Error codes: INVALID_REQUEST'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 'Error codes: UNAUTHORIZED'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: 'Error codes: PAYLOAD_TOO_LARGE'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '415':
+          description: 'Error codes: UNSUPPORTED_MEDIA_TYPE'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: 'Error codes: INVALID_IMAGE, IMAGE_TOO_SMALL, NO_FACE, MULTIPLE_FACES, FACE_TOO_SMALL'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 'Error codes: INTERNAL_ERROR'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 'Error codes: MODEL_UNAVAILABLE, BUSY, INFERENCE_FAILED'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    ArtifactOut:
+      properties:
+        name:
+          type: string
+          title: Name
+        file:
+          type: string
+          title: File
+        sha256:
+          type: string
+          title: Sha256
+      type: object
+      required:
+      - name
+      - file
+      - sha256
+      title: ArtifactOut
+    CapabilitiesResponse:
+      properties:
+        service:
+          type: string
+          title: Service
+        version:
+          type: string
+          title: Version
+        api_version:
+          type: string
+          const: v1
+          title: Api Version
+          default: v1
+        ready:
+          type: boolean
+          title: Ready
+        methods:
+          items:
+            $ref: '#/components/schemas/MethodInfo'
+          type: array
+          title: Methods
+        unsupported:
+          items:
+            type: string
+          type: array
+          title: Unsupported
+        input:
+          $ref: '#/components/schemas/InputLimits'
+        decision:
+          $ref: '#/components/schemas/DecisionPolicy'
+        model:
+          $ref: '#/components/schemas/ModelInfo'
+        face_matching:
+          type: boolean
+          const: false
+          title: Face Matching
+          default: false
+        image_persistence:
+          type: string
+          const: none
+          title: Image Persistence
+          default: none
+      type: object
+      required:
+      - service
+      - version
+      - ready
+      - methods
+      - unsupported
+      - input
+      - decision
+      - model
+      title: CapabilitiesResponse
+    ComponentScoreOut:
+      properties:
+        name:
+          type: string
+          title: Name
+        live_score:
+          type: number
+          maximum: 1.0
+          minimum: 0.0
+          title: Live Score
+      type: object
+      required:
+      - name
+      - live_score
+      title: ComponentScoreOut
+    Decision:
+      type: string
+      enum:
+      - live
+      - spoof
+      title: Decision
+    DecisionPolicy:
+      properties:
+        score:
+          type: string
+          title: Score
+        threshold:
+          type: number
+          title: Threshold
+        threshold_calibrated:
+          type: boolean
+          title: Threshold Calibrated
+        calibration_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Calibration Id
+      type: object
+      required:
+      - score
+      - threshold
+      - threshold_calibrated
+      - calibration_id
+      title: DecisionPolicy
+    ErrorBody:
+      properties:
+        code:
+          type: string
+          title: Code
+          description: Stable machine-readable error code.
+        message:
+          type: string
+          title: Message
+        retryable:
+          type: boolean
+          title: Retryable
+        request_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Request Id
+      type: object
+      required:
+      - code
+      - message
+      - retryable
+      - request_id
+      title: ErrorBody
+    ErrorResponse:
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorBody'
+      type: object
+      required:
+      - error
+      title: ErrorResponse
+    FaceRegion:
+      properties:
+        x:
+          type: integer
+          title: X
+        y:
+          type: integer
+          title: Y
+        width:
+          type: integer
+          title: Width
+        height:
+          type: integer
+          title: Height
+        detection_score:
+          type: number
+          maximum: 1.0
+          minimum: 0.0
+          title: Detection Score
+      type: object
+      required:
+      - x
+      - y
+      - width
+      - height
+      - detection_score
+      title: FaceRegion
+    HealthResponse:
+      properties:
+        status:
+          type: string
+          const: ok
+          title: Status
+      type: object
+      required:
+      - status
+      title: HealthResponse
+    ImageInfo:
+      properties:
+        width:
+          type: integer
+          title: Width
+        height:
+          type: integer
+          title: Height
+        media_type:
+          type: string
+          title: Media Type
+      type: object
+      required:
+      - width
+      - height
+      - media_type
+      title: ImageInfo
+    InputLimits:
+      properties:
+        formats:
+          items:
+            type: string
+          type: array
+          title: Formats
+        max_image_bytes:
+          type: integer
+          title: Max Image Bytes
+        max_image_pixels:
+          type: integer
+          title: Max Image Pixels
+        min_image_side_px:
+          type: integer
+          title: Min Image Side Px
+        min_face_size_px:
+          type: integer
+          title: Min Face Size Px
+        faces_required:
+          type: integer
+          const: 1
+          title: Faces Required
+          default: 1
+      type: object
+      required:
+      - formats
+      - max_image_bytes
+      - max_image_pixels
+      - min_image_side_px
+      - min_face_size_px
+      title: InputLimits
+    LivenessCheckRequest:
+      properties:
+        image_base64:
+          type: string
+          minLength: 1
+          title: Image Base64
+          description: Standard base64 of a JPEG, PNG or WebP image containing exactly one face. A `data:image/...;base64,`
+            prefix is tolerated. The image is processed in memory only and is never persisted.
+        mode:
+          type: string
+          const: passive_single_image
+          title: Mode
+          description: Liveness method. Only passive single-image PAD is implemented.
+          default: passive_single_image
+      additionalProperties: false
+      type: object
+      required:
+      - image_base64
+      title: LivenessCheckRequest
+    LivenessCheckResponse:
+      properties:
+        request_id:
+          type: string
+          title: Request Id
+        decision:
+          $ref: '#/components/schemas/Decision'
+          description: '`live` only if live_score >= threshold; otherwise `spoof`.'
+        is_live:
+          type: boolean
+          title: Is Live
+        live_score:
+          type: number
+          maximum: 1.0
+          minimum: 0.0
+          title: Live Score
+          description: Ensemble-mean probability of a bona fide (live) face.
+        threshold:
+          type: number
+          title: Threshold
+        method:
+          type: string
+          const: passive_single_image
+          title: Method
+        face:
+          $ref: '#/components/schemas/FaceRegion'
+        faces_detected:
+          type: integer
+          title: Faces Detected
+        components:
+          items:
+            $ref: '#/components/schemas/ComponentScoreOut'
+          type: array
+          title: Components
+        model:
+          $ref: '#/components/schemas/ModelRef'
+        image:
+          $ref: '#/components/schemas/ImageInfo'
+        processing_ms:
+          type: number
+          title: Processing Ms
+        image_persisted:
+          type: boolean
+          const: false
+          title: Image Persisted
+          default: false
+      type: object
+      required:
+      - request_id
+      - decision
+      - is_live
+      - live_score
+      - threshold
+      - method
+      - face
+      - faces_detected
+      - components
+      - model
+      - image
+      - processing_ms
+      title: LivenessCheckResponse
+    MethodInfo:
+      properties:
+        id:
+          type: string
+          title: Id
+        description:
+          type: string
+          title: Description
+      type: object
+      required:
+      - id
+      - description
+      title: MethodInfo
+    ModelInfo:
+      properties:
+        id:
+          type: string
+          title: Id
+        detector:
+          type: string
+          title: Detector
+        license:
+          type: string
+          title: License
+        artifacts:
+          items:
+            $ref: '#/components/schemas/ArtifactOut'
+          type: array
+          title: Artifacts
+      type: object
+      required:
+      - id
+      - detector
+      - license
+      - artifacts
+      title: ModelInfo
+    ModelRef:
+      properties:
+        id:
+          type: string
+          title: Id
+        detector:
+          type: string
+          title: Detector
+        threshold_calibrated:
+          type: boolean
+          title: Threshold Calibrated
+        calibration_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Calibration Id
+      type: object
+      required:
+      - id
+      - detector
+      - threshold_calibrated
+      - calibration_id
+      title: ModelRef
+    ReadinessResponse:
+      properties:
+        status:
+          type: string
+          enum:
+          - ready
+          - not_ready
+          title: Status
+        checks:
+          additionalProperties:
+            type: string
+          type: object
+          title: Checks
+      type: object
+      required:
+      - status
+      - checks
+      title: ReadinessResponse
+    StatusResponse:
+      properties:
+        service:
+          type: string
+          title: Service
+        version:
+          type: string
+          title: Version
+        environment:
+          type: string
+          title: Environment
+        ready:
+          type: boolean
+          title: Ready
+        reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason
+        uptime_seconds:
+          type: number
+          title: Uptime Seconds
+      type: object
+      required:
+      - service
+      - version
+      - environment
+      - ready
+      - reason
+      - uptime_seconds
+      title: StatusResponse
