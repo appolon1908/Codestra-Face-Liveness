@@ -7,11 +7,14 @@ import logging
 import re
 import time
 import uuid
+from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from threading import Lock
 from typing import Any
 
-from fastapi import Depends, FastAPI, Path, Request, Response
+from fastapi import Depends, FastAPI, Header, Path, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
@@ -54,6 +57,8 @@ from .schemas import (
     InputLimits,
     LivenessCheckRequest,
     LivenessCheckResponse,
+    LivenessEvidencePage,
+    LivenessEvidenceSummary,
     MethodInfo,
     ModelInfo,
     ModelRef,
@@ -69,6 +74,8 @@ log = logging.getLogger("face_liveness.api")
 
 REQUEST_ID_HEADER = "X-Request-ID"
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:\-]{1,128}$")
+_TENANT_ID_RE = re.compile(r"^[A-Za-z0-9._:\-]{1,128}$")
+_EVIDENCE_STORE_LIMIT = 1000
 
 
 def _error_response(code: ErrorCode, message: str) -> JSONResponse:
@@ -243,6 +250,10 @@ def create_app(
         ttl_seconds=settings.challenge_ttl_seconds,
         capacity=settings.max_outstanding_challenges,
     )
+    evidence_store: deque[tuple[str, LivenessEvidenceSummary]] = deque(
+        maxlen=_EVIDENCE_STORE_LIMIT
+    )
+    evidence_lock = Lock()
     metrics.checks_in_flight.set_function(lambda: admission.in_flight)
     metrics.checks_waiting.set_function(lambda: admission.waiting)
     metrics.challenges_outstanding.set_function(lambda: challenges.outstanding())
@@ -321,6 +332,39 @@ def create_app(
     app.state.metrics = metrics
     app.state.admission = admission
     app.state.challenges = challenges
+    app.state.evidence_store = evidence_store
+
+    def _tenant(value: str | None, *, required: bool) -> str | None:
+        if value is None:
+            if required:
+                raise LivenessError(ErrorCode.INVALID_REQUEST, "X-Tenant-ID header is required")
+            return None
+        value = value.strip()
+        if not _TENANT_ID_RE.fullmatch(value):
+            raise LivenessError(ErrorCode.INVALID_REQUEST, "invalid X-Tenant-ID header")
+        return value
+
+    def _store_evidence(tenant_id: str, response: LivenessCheckResponse) -> str:
+        evidence_ref = "lev_" + uuid.uuid4().hex
+        summary = LivenessEvidenceSummary(
+            evidence_ref=evidence_ref,
+            request_id=response.request_id,
+            created_at=datetime.now(timezone.utc),
+            decision=response.decision,
+            is_live=response.is_live,
+            live_score=response.live_score,
+            threshold=response.threshold,
+            method=response.method,
+            model_id=response.evidence.model_id,
+            model_version=response.evidence.model_version,
+            model_digest=response.evidence.model_digest,
+            policy_id=response.evidence.policy_id,
+            decision_reason=response.evidence.decision_reason,
+            active_liveness_evaluated=response.evidence.active_liveness_evaluated,
+        )
+        with evidence_lock:
+            evidence_store.append((tenant_id, summary))
+        return evidence_ref
 
     def record_rejection(
         request: Request | None, code: ErrorCode, guard: Guard | None = None
@@ -734,7 +778,10 @@ def create_app(
             )
 
     def assess(
-        body: LivenessCheckRequest, request: Request, challenge_id: str | None = None
+        body: LivenessCheckRequest,
+        request: Request,
+        challenge_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> LivenessCheckResponse:
         deadline = Deadline(
             settings.request_timeout_seconds,
@@ -804,7 +851,7 @@ def create_app(
         calibration_id = settings.threshold_calibration_id or None
         face = result.face
         live_score = round(result.live_score, 6)
-        return LivenessCheckResponse(
+        response = LivenessCheckResponse(
             request_id=request_id_var.get() or "",
             decision=fused.decision,
             is_live=fused.decision is Decision.LIVE,
@@ -869,6 +916,10 @@ def create_app(
                 ),
             ),
         )
+        tenant_id = _tenant(tenant_id, required=False)
+        if tenant_id is not None:
+            response.evidence_ref = _store_evidence(tenant_id, response)
+        return response
 
     @app.post(
         "/v1/liveness/check",
@@ -878,7 +929,11 @@ def create_app(
         dependencies=caller,
         responses=_error_responses(*_ASSESSMENT_ERRORS),
     )
-    def check_liveness(body: LivenessCheckRequest, request: Request) -> LivenessCheckResponse:
+    def check_liveness(
+        body: LivenessCheckRequest,
+        request: Request,
+        tenant_id: str | None = Header(default=None, alias="X-Tenant-ID"),
+    ) -> LivenessCheckResponse:
         """Passive single-image liveness check.
 
         A `200` response is a completed assessment: `decision` is `live` or `spoof`.
@@ -886,7 +941,7 @@ def create_app(
         the subject as not verified (fail closed). `spoof` is a normal 200 outcome, not
         an error.
         """
-        return assess(body, request)
+        return assess(body, request, tenant_id=tenant_id)
 
     @app.post(
         "/v1/liveness/challenges/{challenge_id}/verify",
@@ -905,6 +960,7 @@ def create_app(
         body: LivenessCheckRequest,
         request: Request,
         challenge_id: str = Path(max_length=128),
+        tenant_id: str | None = Header(default=None, alias="X-Tenant-ID"),
     ) -> LivenessCheckResponse:
         """Consume a challenge and run the passive check on the submitted capture.
 
@@ -915,6 +971,53 @@ def create_app(
         active provider is available (none is installed today, so it fails closed with
         `EVIDENCE_UNAVAILABLE`); `active_liveness_evaluated` is false without it.
         """
-        return assess(body, request, challenge_id=challenge_id)
+        return assess(body, request, challenge_id=challenge_id, tenant_id=tenant_id)
+
+    @app.get(
+        "/v1/liveness/evidence",
+        response_model=LivenessEvidencePage,
+        tags=["liveness"],
+        operation_id="listLivenessEvidence",
+        dependencies=caller,
+        responses=_error_responses(ErrorCode.UNAUTHORIZED, ErrorCode.INVALID_REQUEST),
+    )
+    def list_liveness_evidence(
+        tenant_id: str = Header(alias="X-Tenant-ID"),
+        limit: int = Query(default=50, ge=1, le=100),
+        offset: int = Query(default=0, ge=0),
+    ) -> LivenessEvidencePage:
+        """Bounded, tenant-scoped readback of reference-only assessment summaries."""
+        tenant = _tenant(tenant_id, required=True)
+        assert tenant is not None
+        with evidence_lock:
+            matching = [summary for stored_tenant, summary in evidence_store if stored_tenant == tenant]
+        matching.reverse()
+        items = matching[offset : offset + limit]
+        return LivenessEvidencePage(
+            items=items, limit=limit, offset=offset, returned=len(items), total=len(matching)
+        )
+
+    @app.get(
+        "/v1/liveness/evidence/{evidence_ref}",
+        response_model=LivenessEvidenceSummary,
+        tags=["liveness"],
+        operation_id="getLivenessEvidence",
+        dependencies=caller,
+        responses=_error_responses(
+            ErrorCode.UNAUTHORIZED, ErrorCode.INVALID_REQUEST, ErrorCode.NOT_FOUND
+        ),
+    )
+    def get_liveness_evidence(
+        evidence_ref: str = Path(pattern=r"^lev_[0-9a-f]{32}$"),
+        tenant_id: str = Header(alias="X-Tenant-ID"),
+    ) -> LivenessEvidenceSummary:
+        """Read one assessment summary only when the tenant binding matches."""
+        tenant = _tenant(tenant_id, required=True)
+        assert tenant is not None
+        with evidence_lock:
+            for stored_tenant, summary in reversed(evidence_store):
+                if summary.evidence_ref == evidence_ref and stored_tenant == tenant:
+                    return summary
+        raise LivenessError(ErrorCode.NOT_FOUND, "liveness evidence reference not found")
 
     return app

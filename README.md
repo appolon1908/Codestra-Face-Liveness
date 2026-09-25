@@ -193,3 +193,12 @@ development -> testing -> staging -> production
 The API environment name used in contracts is `test` while the Git branch is `testing`.
 
 Production activation remains a separate release decision and must not be inferred from code existing on an integration branch.
+
+### Tenant-scoped evidence readback
+
+Middleware callers may send `X-Tenant-ID` on liveness checks and challenge verification.
+Successful assessments then include an opaque `evidence_ref`. `GET /v1/liveness/evidence`
+and `GET /v1/liveness/evidence/{evidence_ref}` require the same tenant header and expose
+only bounded decision/model/policy metadata. They never return images, embeddings, face
+geometry, subject identifiers, or an identity assertion. The in-process store is bounded
+to the most recent 1000 summaries and is operational readback, not durable evidence storage.

@@ -141,6 +141,45 @@ class LivenessCheckResponse(BaseModel):
     processing_ms: float
     image_persisted: Literal[False] = False
     evidence: DecisionEvidence
+    evidence_ref: str | None = Field(
+        default=None,
+        description=(
+            "Opaque tenant-bound readback reference. Present only when the caller supplied "
+            "`X-Tenant-ID`; it never identifies a person and cannot be used as identity proof."
+        ),
+    )
+
+
+class LivenessEvidenceSummary(BaseModel):
+    """Reference-only summary retained for Middleware readback.
+
+    Deliberately excludes images, face geometry, embeddings, names and subject identifiers.
+    """
+
+    evidence_ref: str
+    request_id: str
+    created_at: datetime
+    decision: Decision
+    is_live: bool
+    live_score: float = Field(ge=0.0, le=1.0)
+    threshold: float
+    method: Literal["passive_single_image"]
+    model_id: str
+    model_version: str
+    model_digest: str
+    policy_id: str
+    decision_reason: DecisionReason
+    active_liveness_evaluated: bool
+    identity_assertion: Literal[False] = False
+    image_persisted: Literal[False] = False
+
+
+class LivenessEvidencePage(BaseModel):
+    items: list[LivenessEvidenceSummary]
+    limit: int = Field(ge=1, le=100)
+    offset: int = Field(ge=0)
+    returned: int = Field(ge=0)
+    total: int = Field(ge=0)
 
 
 class ChallengeInstructionOut(BaseModel):

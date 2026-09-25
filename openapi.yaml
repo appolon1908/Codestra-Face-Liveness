@@ -229,12 +229,21 @@ paths:
 
         an error.'
       operationId: checkLiveness
+      parameters:
+      - name: X-Tenant-ID
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Tenant-Id
       requestBody:
+        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/LivenessCheckRequest'
-        required: true
       responses:
         '200':
           description: Successful Response
@@ -313,6 +322,14 @@ paths:
           type: string
           maxLength: 128
           title: Challenge Id
+      - name: X-Tenant-ID
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-Tenant-Id
       requestBody:
         required: true
         content:
@@ -387,6 +404,114 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /v1/liveness/evidence:
+    get:
+      tags:
+      - liveness
+      summary: List Liveness Evidence
+      description: Bounded, tenant-scoped readback of reference-only assessment summaries.
+      operationId: listLivenessEvidence
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 50
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      - name: X-Tenant-ID
+        in: header
+        required: true
+        schema:
+          type: string
+          title: X-Tenant-Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LivenessEvidencePage'
+        '400':
+          description: 'Error codes: INVALID_REQUEST'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 'Error codes: UNAUTHORIZED'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/liveness/evidence/{evidence_ref}:
+    get:
+      tags:
+      - liveness
+      summary: Get Liveness Evidence
+      description: Read one assessment summary only when the tenant binding matches.
+      operationId: getLivenessEvidence
+      parameters:
+      - name: evidence_ref
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^lev_[0-9a-f]{32}$
+          title: Evidence Ref
+      - name: X-Tenant-ID
+        in: header
+        required: true
+        schema:
+          type: string
+          title: X-Tenant-Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LivenessEvidenceSummary'
+        '400':
+          description: 'Error codes: INVALID_REQUEST'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 'Error codes: UNAUTHORIZED'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 'Error codes: NOT_FOUND'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
     ActiveEvidence:
@@ -1142,6 +1267,13 @@ components:
           default: false
         evidence:
           $ref: '#/components/schemas/DecisionEvidence'
+        evidence_ref:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Evidence Ref
+          description: Opaque tenant-bound readback reference. Present only when the caller supplied `X-Tenant-ID`;
+            it never identifies a person and cannot be used as identity proof.
       type: object
       required:
       - request_id
@@ -1158,6 +1290,115 @@ components:
       - processing_ms
       - evidence
       title: LivenessCheckResponse
+    LivenessEvidencePage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/LivenessEvidenceSummary'
+          type: array
+          title: Items
+        limit:
+          type: integer
+          maximum: 100.0
+          minimum: 1.0
+          title: Limit
+        offset:
+          type: integer
+          minimum: 0.0
+          title: Offset
+        returned:
+          type: integer
+          minimum: 0.0
+          title: Returned
+        total:
+          type: integer
+          minimum: 0.0
+          title: Total
+      type: object
+      required:
+      - items
+      - limit
+      - offset
+      - returned
+      - total
+      title: LivenessEvidencePage
+    LivenessEvidenceSummary:
+      properties:
+        evidence_ref:
+          type: string
+          title: Evidence Ref
+        request_id:
+          type: string
+          title: Request Id
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        decision:
+          $ref: '#/components/schemas/Decision'
+        is_live:
+          type: boolean
+          title: Is Live
+        live_score:
+          type: number
+          maximum: 1.0
+          minimum: 0.0
+          title: Live Score
+        threshold:
+          type: number
+          title: Threshold
+        method:
+          type: string
+          const: passive_single_image
+          title: Method
+        model_id:
+          type: string
+          title: Model Id
+        model_version:
+          type: string
+          title: Model Version
+        model_digest:
+          type: string
+          title: Model Digest
+        policy_id:
+          type: string
+          title: Policy Id
+        decision_reason:
+          $ref: '#/components/schemas/DecisionReason'
+        active_liveness_evaluated:
+          type: boolean
+          title: Active Liveness Evaluated
+        identity_assertion:
+          type: boolean
+          const: false
+          title: Identity Assertion
+          default: false
+        image_persisted:
+          type: boolean
+          const: false
+          title: Image Persisted
+          default: false
+      type: object
+      required:
+      - evidence_ref
+      - request_id
+      - created_at
+      - decision
+      - is_live
+      - live_score
+      - threshold
+      - method
+      - model_id
+      - model_version
+      - model_digest
+      - policy_id
+      - decision_reason
+      - active_liveness_evaluated
+      title: LivenessEvidenceSummary
+      description: 'Reference-only summary retained for Middleware readback.
+
+
+        Deliberately excludes images, face geometry, embeddings, names and subject identifiers.'
     MethodInfo:
       properties:
         id:
