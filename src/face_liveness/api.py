@@ -19,21 +19,28 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from . import SERVICE_NAME, __version__
+from .active import ActiveLivenessProvider, ActiveResult, resolve_active_provider
 from .admission import AdmissionController, Deadline
 from .challenges import ChallengeStore
 from .config import Settings
 from .engine import Decision, LivenessEngine
-from .errors import HTTP_STATUS, STAGE, ErrorCode, LivenessError
-from .imaging import ALLOWED_FORMATS, decode_base64, decode_image
+from .errors import HTTP_STATUS, STAGE, ErrorCode, Guard, LivenessError
+from .fusion import POLICIES, FusionPolicy, fuse, require_ready, resolve_policy
+from .imaging import ALLOWED_FORMATS, DecodedImage, decode_base64, decode_image
 from .logging_config import request_id_var
 from .metrics import Metrics
 from .registry import RegistryEntry
 from .runtime import ModelRuntime, load_runtime
 from .schemas import (
     PASSIVE_SINGLE_IMAGE,
+    ActiveEvidence,
+    ActiveLivenessInfo,
+    ActiveProviderOut,
     ArtifactOut,
     CapabilitiesResponse,
+    CapacityProfileRef,
     ChallengeEvidence,
+    ChallengeInstructionOut,
     ChallengeIssueResponse,
     ChallengePolicy,
     ComponentScoreOut,
@@ -41,6 +48,7 @@ from .schemas import (
     DecisionPolicy,
     ErrorResponse,
     FaceRegion,
+    FusionPolicyOut,
     HealthResponse,
     ImageInfo,
     InputLimits,
@@ -54,6 +62,7 @@ from .schemas import (
     ReadinessResponse,
     ResourceLimits,
     StatusResponse,
+    ValidationOut,
 )
 
 log = logging.getLogger("face_liveness.api")
@@ -102,6 +111,7 @@ _ASSESSMENT_ERRORS = (
     ErrorCode.MODEL_UNAVAILABLE,
     ErrorCode.BUSY,
     ErrorCode.DEADLINE_EXCEEDED,
+    ErrorCode.EVIDENCE_UNAVAILABLE,
     ErrorCode.INFERENCE_FAILED,
 )
 
@@ -171,6 +181,7 @@ def _route_template(request: Request) -> str:
 
 def _model_version_out(entry: RegistryEntry) -> ModelVersionOut:
     m = entry.manifest
+    rec = entry.validation
     return ModelVersionOut(
         model_id=m.model_id if m else None,
         version=m.version if m else None,
@@ -185,12 +196,47 @@ def _model_version_out(entry: RegistryEntry) -> ModelVersionOut:
             ArtifactOut(name=a.name, file=a.file, sha256=a.sha256)
             for a in (m.artifacts if m else [])
         ],
+        validation=(
+            ValidationOut(
+                passed=rec.passed,
+                validated_at=rec.validated_at,
+                calibration_id=rec.calibration.calibration_id,
+                threshold=rec.calibration.threshold,
+                digests_passed=rec.digests.passed,
+                smoke_passed=rec.smoke.passed,
+                calibration_passed=rec.calibration.passed,
+            )
+            if rec is not None
+            else None
+        ),
+        validation_error=entry.validation_error,
     )
 
 
-def create_app(settings: Settings | None = None, runtime: ModelRuntime | None = None) -> FastAPI:
+def _decode(data: str, settings: Settings) -> DecodedImage:
+    raw = decode_base64(data, settings.max_image_bytes)
+    return decode_image(
+        raw,
+        max_pixels=settings.max_image_pixels,
+        min_side=settings.min_image_side_px,
+        max_side=settings.max_image_side_px,
+        max_decoded_bytes=settings.max_decoded_bytes,
+    )
+
+
+def create_app(
+    settings: Settings | None = None,
+    runtime: ModelRuntime | None = None,
+    active_provider: ActiveLivenessProvider | None = None,
+) -> FastAPI:
     settings = settings or Settings()
     metrics = Metrics()
+    active = resolve_active_provider(settings, active_provider)
+    policy_state = resolve_policy(settings.fusion_policy_id, active)
+    # Active captures carry several frames; the body limit grows only when they are usable.
+    body_limit = settings.max_request_bytes * (
+        1 + settings.max_active_frames if active.available else 1
+    )
     started_at = time.monotonic()
     admission = AdmissionController(settings.max_concurrent_checks, settings.max_queued_checks)
     challenges = ChallengeStore(
@@ -200,6 +246,10 @@ def create_app(settings: Settings | None = None, runtime: ModelRuntime | None = 
     metrics.checks_in_flight.set_function(lambda: admission.in_flight)
     metrics.checks_waiting.set_function(lambda: admission.waiting)
     metrics.challenges_outstanding.set_function(lambda: challenges.outstanding())
+    metrics.active_provider_available.set(1 if active.available else 0)
+    metrics.fusion_policy_ready.labels(
+        policy_state.configured_id if policy_state.configured_id in POLICIES else "unknown"
+    ).set(1 if policy_state.ready else 0)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -236,6 +286,10 @@ def create_app(settings: Settings | None = None, runtime: ModelRuntime | None = 
             )
         else:
             log.error("model runtime NOT ready; failing closed", extra={"reason": rt.error})
+        if not policy_state.ready:
+            log.error(
+                "fusion policy NOT ready; failing closed", extra={"reason": policy_state.error}
+            )
         if not settings.threshold_calibration_id:
             log.warning(
                 "live_threshold is the provisional default (uncalibrated)",
@@ -268,16 +322,20 @@ def create_app(settings: Settings | None = None, runtime: ModelRuntime | None = 
     app.state.admission = admission
     app.state.challenges = challenges
 
-    def record_rejection(request: Request | None, code: ErrorCode) -> None:
+    def record_rejection(
+        request: Request | None, code: ErrorCode, guard: Guard | None = None
+    ) -> None:
         route = _route_template(request) if request is not None else "pre_routing"
         metrics.rejections.labels(route, STAGE[code], code.value).inc()
+        if guard is not None:
+            metrics.guard_rejections.labels(guard.value).inc()
 
     # --- error envelope -----------------------------------------------------------------
 
     @app.exception_handler(LivenessError)
     async def _liveness_error(request: Request, exc: LivenessError) -> JSONResponse:
         request.state.outcome = exc.code.value
-        record_rejection(request, exc.code)
+        record_rejection(request, exc.code, exc.guard)
         return _error_response(exc.code, exc.message)
 
     @app.exception_handler(RequestValidationError)
@@ -333,7 +391,7 @@ def create_app(settings: Settings | None = None, runtime: ModelRuntime | None = 
                     "status": status,
                     "duration_ms": round(elapsed * 1000, 2),
                 }
-                for key in ("outcome", "live_score", "model_version"):
+                for key in ("outcome", "live_score", "model_version", "policy_id"):
                     if hasattr(request.state, key):
                         extra[key] = getattr(request.state, key)
                 log.info("request completed", extra=extra)
@@ -341,8 +399,8 @@ def create_app(settings: Settings | None = None, runtime: ModelRuntime | None = 
 
     app.add_middleware(
         BodySizeLimitMiddleware,
-        max_bytes=settings.max_request_bytes,
-        on_reject=lambda: record_rejection(None, ErrorCode.PAYLOAD_TOO_LARGE),
+        max_bytes=body_limit,
+        on_reject=lambda: record_rejection(None, ErrorCode.PAYLOAD_TOO_LARGE, Guard.REQUEST_BODY),
     )
 
     # --- auth ----------------------------------------------------------------------------
@@ -369,6 +427,11 @@ def create_app(settings: Settings | None = None, runtime: ModelRuntime | None = 
     def _readiness_checks() -> dict[str, str]:
         rt = _runtime()
         checks = {"model": "ok" if rt.ready else f"fail: {rt.error}"}
+        checks["fusion_policy"] = "ok" if policy_state.ready else f"fail: {policy_state.error}"
+        if active.configured_id is not None:
+            # An operator asked for an active provider: its absence is a failure, not a
+            # silent downgrade to passive-only.
+            checks["active_provider"] = "ok" if active.available else f"fail: {active.reason}"
         if settings.auth_required:
             checks["auth"] = (
                 "ok" if settings.resolved_api_token else "fail: api token not configured"
@@ -427,6 +490,11 @@ def create_app(settings: Settings | None = None, runtime: ModelRuntime | None = 
         rt = _runtime()
         manifest = rt.manifest
         calibration_id = settings.threshold_calibration_id or None
+        policy = policy_state.policy
+        desc = active.provider.descriptor if active.provider is not None else None
+        unsupported = ["video_sequence", "depth_or_ir", "face_matching", "identity_verification"]
+        if not active.available:
+            unsupported.insert(0, "active_challenge")
         return CapabilitiesResponse(
             service=SERVICE_NAME,
             version=__version__,
@@ -440,18 +508,40 @@ def create_app(settings: Settings | None = None, runtime: ModelRuntime | None = 
                     ),
                 )
             ],
-            unsupported=[
-                "active_challenge",
-                "video_sequence",
-                "depth_or_ir",
-                "face_matching",
-                "identity_verification",
-            ],
+            unsupported=unsupported,
             passive_liveness=True,
-            # Manifests can only describe passive models (registry schema v1), so this is
-            # false by construction until a real active model and schema exist.
-            active_liveness=False,
-            challenge=ChallengePolicy(ttl_seconds=settings.challenge_ttl_seconds),
+            # No provider ships with the service (active.KNOWN_PROVIDERS is empty), so this
+            # is false unless a tested provider is explicitly plugged in.
+            active_liveness=active.available,
+            active=ActiveLivenessInfo(
+                available=active.available,
+                configured_provider_id=active.configured_id,
+                provider=(
+                    ActiveProviderOut(
+                        provider_id=desc.provider_id,
+                        version=desc.version,
+                        contract_version=desc.contract_version,
+                        validation_id=desc.validation_id or None,
+                    )
+                    if desc is not None
+                    else None
+                ),
+                max_frames=settings.max_active_frames,
+                reason=active.reason,
+            ),
+            fusion=FusionPolicyOut(
+                policy_id=policy_state.configured_id,
+                strategy=policy.strategy if policy else None,
+                required_evidence=list(policy.required) if policy else [],
+                description=policy.description if policy else None,
+                ready=policy_state.ready,
+                reason=policy_state.error,
+            ),
+            challenge=ChallengePolicy(
+                ttl_seconds=settings.challenge_ttl_seconds,
+                challenge_type="active_challenge" if active.available else "freshness_nonce",
+                active_liveness=active.available,
+            ),
             input=InputLimits(
                 formats=sorted(ALLOWED_FORMATS.values()),
                 max_image_bytes=settings.max_image_bytes,
@@ -466,7 +556,11 @@ def create_app(settings: Settings | None = None, runtime: ModelRuntime | None = 
                 max_queued_checks=settings.max_queued_checks,
                 busy_timeout_seconds=settings.busy_timeout_seconds,
                 request_timeout_seconds=settings.request_timeout_seconds,
-                max_request_bytes=settings.max_request_bytes,
+                max_request_bytes=body_limit,
+                capacity_profile=CapacityProfileRef(
+                    profile_id=settings.capacity_profile_id or None,
+                    tested=bool(settings.capacity_profile_id),
+                ),
             ),
             decision=DecisionPolicy(
                 score="mean of MiniFASNet softmax[live] over the ensemble",
@@ -562,10 +656,10 @@ def create_app(settings: Settings | None = None, runtime: ModelRuntime | None = 
     def issue_challenge() -> ChallengeIssueResponse:
         """Issue a short-lived, single-use challenge.
 
-        Today this is a freshness / replay-prevention nonce only: it has no instructions
-        and does not make the check *active* liveness. Verify it with
-        `POST /v1/liveness/challenges/{challenge_id}/verify`; the passive model decision
-        is authoritative.
+        Today this is a freshness / replay-prevention nonce only: no tested active
+        provider is installed, so it has no instructions and does not make the check
+        *active* liveness. Verify it with `POST /v1/liveness/challenges/{challenge_id}/verify`;
+        the configured fusion policy (default `passive-only.v1`) decides.
         """
         try:
             issued = challenges.issue()
@@ -573,17 +667,71 @@ def create_app(settings: Settings | None = None, runtime: ModelRuntime | None = 
             metrics.challenges.labels(exc.code.value).inc()
             raise
         metrics.challenges.labels("issued").inc()
+        instructions: list[ChallengeInstructionOut] = []
+        if active.available and active.provider is not None:
+            instructions = [
+                ChallengeInstructionOut(action=i.action, timeout_seconds=i.timeout_seconds)
+                for i in active.provider.instructions(issued.challenge_id)
+            ]
         return ChallengeIssueResponse(
             challenge_id=issued.challenge_id,
-            challenge_type="freshness_nonce",
+            challenge_type="active_challenge" if instructions else "freshness_nonce",
             issued_at=issued.issued_at,
             expires_at=issued.expires_at,
             ttl_seconds=issued.ttl_seconds,
-            instructions=[],
+            instructions=instructions,
+            active_liveness=bool(instructions),
             authoritative_method=PASSIVE_SINGLE_IMAGE,
         )
 
     # --- liveness -------------------------------------------------------------------------
+
+    def evaluate_active(
+        frames_b64: list[str], challenge_id: str, deadline: Deadline
+    ) -> ActiveResult:
+        provider = active.provider
+        assert provider is not None  # checked by check_active_request
+        frames = [_decode(f, settings) for f in frames_b64]
+        deadline.check("active")
+        try:
+            result = provider.evaluate(challenge_id, frames)
+        except LivenessError:
+            raise
+        except Exception as exc:
+            log.exception("active provider evaluation failed")
+            raise LivenessError(ErrorCode.INFERENCE_FAILED, "active evaluation failed") from exc
+        desc = provider.descriptor
+        if (result.provider_id, result.provider_version) != (desc.provider_id, desc.version):
+            raise LivenessError(ErrorCode.INFERENCE_FAILED, "active result from wrong provider")
+        if result.score is not None and not 0.0 <= result.score <= 1.0:
+            raise LivenessError(ErrorCode.INFERENCE_FAILED, "active score out of range")
+        return result
+
+    def check_active_request(
+        body: LivenessCheckRequest, challenge_id: str | None, policy: FusionPolicy
+    ) -> None:
+        frames = body.active_frames_base64
+        if frames is None:
+            if policy.requires_active:
+                raise LivenessError(
+                    ErrorCode.EVIDENCE_UNAVAILABLE,
+                    f"fusion policy {policy.policy_id} requires an active capture "
+                    "(challenge verify with active_frames_base64)",
+                )
+            return
+        if challenge_id is None:
+            raise LivenessError(
+                ErrorCode.INVALID_REQUEST, "active frames are only accepted on challenge verify"
+            )
+        if not active.available:
+            raise LivenessError(
+                ErrorCode.EVIDENCE_UNAVAILABLE, f"active liveness unavailable: {active.reason}"
+            )
+        if len(frames) > settings.max_active_frames:
+            raise LivenessError(
+                ErrorCode.INVALID_REQUEST,
+                f"at most {settings.max_active_frames} active frames are accepted",
+            )
 
     def assess(
         body: LivenessCheckRequest, request: Request, challenge_id: str | None = None
@@ -595,6 +743,10 @@ def create_app(settings: Settings | None = None, runtime: ModelRuntime | None = 
         started = time.perf_counter()
         try:
             outcome = "error"
+            # A policy that cannot be satisfied fails closed before any work is done and
+            # before a challenge is spent.
+            policy = require_ready(policy_state)
+            check_active_request(body, challenge_id, policy)
             if challenge_id is not None:
                 # Consumed first and unconditionally: any verify attempt spends the
                 # challenge, so a replay can never obtain a second assessment.
@@ -609,6 +761,7 @@ def create_app(settings: Settings | None = None, runtime: ModelRuntime | None = 
             if not rt.ready or rt.manifest is None:
                 raise LivenessError(ErrorCode.MODEL_UNAVAILABLE, "liveness model is not available")
             raw = decode_base64(body.image_base64, settings.max_image_bytes)
+            active_result: ActiveResult | None = None
             with admission.slot(timeout=min(settings.busy_timeout_seconds, deadline.remaining())):
                 deadline.check("decode")
                 image = decode_image(
@@ -621,8 +774,13 @@ def create_app(settings: Settings | None = None, runtime: ModelRuntime | None = 
                 del raw
                 deadline.check("inference")
                 result = engine.check(image)
+                if body.active_frames_base64 is not None and challenge_id is not None:
+                    active_result = evaluate_active(
+                        body.active_frames_base64, challenge_id, deadline
+                    )
+            fused = fuse(policy, result, active_result)
             deadline.check("response")
-            outcome = result.decision.value
+            outcome = fused.decision.value
         except LivenessError as exc:
             outcome = exc.code.value
             raise
@@ -631,17 +789,25 @@ def create_app(settings: Settings | None = None, runtime: ModelRuntime | None = 
             request.state.outcome = outcome
 
         manifest = rt.manifest
+        received = getattr(request.state, "received_at", None)
         metrics.inference_duration.observe(result.inference_seconds)
-        metrics.live_score.observe(result.live_score)
+        metrics.live_score.labels(manifest.version).observe(result.live_score)
+        metrics.decisions.labels(
+            fused.decision.value, fused.reason.value, manifest.version, fused.policy_id
+        ).inc()
+        metrics.decision_duration.labels(fused.decision.value, manifest.version).observe(
+            time.monotonic() - received if received is not None else time.perf_counter() - started
+        )
         request.state.live_score = round(result.live_score, 4)
         request.state.model_version = manifest.version
+        request.state.policy_id = fused.policy_id
         calibration_id = settings.threshold_calibration_id or None
         face = result.face
         live_score = round(result.live_score, 6)
         return LivenessCheckResponse(
             request_id=request_id_var.get() or "",
-            decision=result.decision,
-            is_live=result.decision is Decision.LIVE,
+            decision=fused.decision,
+            is_live=fused.decision is Decision.LIVE,
             live_score=live_score,
             threshold=result.threshold,
             method=PASSIVE_SINGLE_IMAGE,
@@ -671,17 +837,34 @@ def create_app(settings: Settings | None = None, runtime: ModelRuntime | None = 
                 model_digest=manifest.digest,
                 detector_id=manifest.detector.name,
                 liveness_type=manifest.liveness_type,
+                active_liveness_evaluated=active_result is not None,
                 score=live_score,
                 score_aggregation=manifest.score_aggregation,
                 threshold=result.threshold,
                 threshold_calibrated=calibration_id is not None,
                 calibration_id=calibration_id,
                 margin=round(result.live_score - result.threshold, 6),
-                decision=result.decision,
-                decision_reason=result.reason,
+                policy_id=fused.policy_id,
+                evidence_used=list(fused.evidence_used),
+                decision=fused.decision,
+                decision_reason=fused.reason,
                 challenge=(
-                    ChallengeEvidence(challenge_id=challenge_id, status="consumed")
+                    ChallengeEvidence(
+                        challenge_id=challenge_id,
+                        status="consumed",
+                        active_liveness_evaluated=active_result is not None,
+                    )
                     if challenge_id is not None
+                    else None
+                ),
+                active=(
+                    ActiveEvidence(
+                        provider_id=active_result.provider_id,
+                        provider_version=active_result.provider_version,
+                        outcome=active_result.outcome,
+                        score=active_result.score,
+                    )
+                    if active_result is not None
                     else None
                 ),
             ),
@@ -728,7 +911,9 @@ def create_app(settings: Settings | None = None, runtime: ModelRuntime | None = 
         The challenge is spent by the first verify attempt whatever its outcome (issue a
         new one to retry). Unknown, expired or already-used challenges fail closed with
         no assessment. A `200` carries the same passive decision as `/v1/liveness/check`
-        plus `evidence.challenge`; `active_liveness_evaluated` is always false.
+        plus `evidence.challenge`. `active_frames_base64` is only accepted when a tested
+        active provider is available (none is installed today, so it fails closed with
+        `EVIDENCE_UNAVAILABLE`); `active_liveness_evaluated` is false without it.
         """
         return assess(body, request, challenge_id=challenge_id)
 

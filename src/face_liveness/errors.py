@@ -23,6 +23,7 @@ class ErrorCode(StrEnum):
     CHALLENGE_NOT_FOUND = "CHALLENGE_NOT_FOUND"
     CHALLENGE_EXPIRED = "CHALLENGE_EXPIRED"
     CHALLENGE_ALREADY_USED = "CHALLENGE_ALREADY_USED"
+    EVIDENCE_UNAVAILABLE = "EVIDENCE_UNAVAILABLE"
     INFERENCE_FAILED = "INFERENCE_FAILED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
@@ -45,6 +46,7 @@ HTTP_STATUS: dict[ErrorCode, int] = {
     ErrorCode.CHALLENGE_NOT_FOUND: 404,
     ErrorCode.CHALLENGE_EXPIRED: 410,
     ErrorCode.CHALLENGE_ALREADY_USED: 409,
+    ErrorCode.EVIDENCE_UNAVAILABLE: 503,
     ErrorCode.INFERENCE_FAILED: 503,
     ErrorCode.INTERNAL_ERROR: 500,
 }
@@ -55,17 +57,34 @@ RETRYABLE: frozenset[ErrorCode] = frozenset(
         ErrorCode.MODEL_UNAVAILABLE,
         ErrorCode.BUSY,
         ErrorCode.DEADLINE_EXCEEDED,
+        ErrorCode.EVIDENCE_UNAVAILABLE,
         ErrorCode.INFERENCE_FAILED,
         ErrorCode.INTERNAL_ERROR,
     }
 )
 
 
+class Guard(StrEnum):
+    """Resource guard that rejected a request (closed set; a metrics label)."""
+
+    REQUEST_BODY = "request_body"
+    IMAGE_BYTES = "image_bytes"
+    IMAGE_DIMENSIONS = "image_dimensions"
+    IMAGE_PIXELS = "image_pixels"
+    DECODED_BYTES = "decoded_bytes"
+    QUEUE_FULL = "queue_full"
+    QUEUE_TIMEOUT = "queue_timeout"
+    DEADLINE = "deadline"
+    CHALLENGE_CAPACITY = "challenge_capacity"
+
+
 class LivenessError(Exception):
-    def __init__(self, code: ErrorCode, message: str) -> None:
+    def __init__(self, code: ErrorCode, message: str, guard: Guard | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        # Set when a size / concurrency / time guard (not the input itself) rejected it.
+        self.guard = guard
 
     @property
     def status_code(self) -> int:
@@ -95,6 +114,7 @@ STAGE: dict[ErrorCode, str] = {
     ErrorCode.CHALLENGE_NOT_FOUND: "challenge",
     ErrorCode.CHALLENGE_EXPIRED: "challenge",
     ErrorCode.CHALLENGE_ALREADY_USED: "challenge",
+    ErrorCode.EVIDENCE_UNAVAILABLE: "policy",
     ErrorCode.INFERENCE_FAILED: "model",
     ErrorCode.INTERNAL_ERROR: "internal",
 }

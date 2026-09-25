@@ -21,9 +21,12 @@ EVIDENCE_KEYS = {
     "threshold_calibrated",
     "calibration_id",
     "margin",
+    "policy_id",
+    "evidence_used",
     "decision",
     "decision_reason",
     "challenge",
+    "active",
 }
 
 
@@ -46,6 +49,9 @@ def test_live_evidence(client, image_b64):
     assert ev["threshold_calibrated"] is False
     assert ev["calibration_id"] is None
     assert ev["challenge"] is None
+    assert ev["policy_id"] == "passive-only.v1"
+    assert ev["evidence_used"] == ["passive"]
+    assert ev["active"] is None
 
 
 def test_spoof_evidence(client, classifier, image_b64):

@@ -12,7 +12,7 @@ def test_healthz(client):
 def test_readyz_ready(client):
     resp = client.get("/readyz")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ready", "checks": {"model": "ok"}}
+    assert resp.json() == {"status": "ready", "checks": {"model": "ok", "fusion_policy": "ok"}}
 
 
 def test_readyz_not_ready_when_model_unavailable(make_client):

@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
-from .errors import ErrorCode, LivenessError
+from .errors import ErrorCode, Guard, LivenessError
 
 
 class AdmissionController:
@@ -39,7 +39,9 @@ class AdmissionController:
         if not self._sem.acquire(blocking=False):
             with self._lock:
                 if self._waiting >= self.max_waiting:
-                    raise LivenessError(ErrorCode.BUSY, "service at capacity; retry shortly")
+                    raise LivenessError(
+                        ErrorCode.BUSY, "service at capacity; retry shortly", Guard.QUEUE_FULL
+                    )
                 self._waiting += 1
             try:
                 acquired = self._sem.acquire(timeout=max(timeout, 0.0))
@@ -47,7 +49,9 @@ class AdmissionController:
                 with self._lock:
                     self._waiting -= 1
             if not acquired:
-                raise LivenessError(ErrorCode.BUSY, "service at capacity; retry shortly")
+                raise LivenessError(
+                    ErrorCode.BUSY, "service at capacity; retry shortly", Guard.QUEUE_TIMEOUT
+                )
         with self._lock:
             self._in_flight += 1
         try:
@@ -74,5 +78,7 @@ class Deadline:
     def check(self, phase: str) -> None:
         if self._clock() >= self._expires:
             raise LivenessError(
-                ErrorCode.DEADLINE_EXCEEDED, f"request time budget exceeded ({phase})"
+                ErrorCode.DEADLINE_EXCEEDED,
+                f"request time budget exceeded ({phase})",
+                Guard.DEADLINE,
             )

@@ -1,0 +1,256 @@
+{
+  "$defs": {
+    "ActivationPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "auto_activated": {
+          "const": false,
+          "default": false,
+          "description": "Always false: activation is a local operator action.",
+          "title": "Auto Activated",
+          "type": "boolean"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Deployment settings that activate this version (empty if not passed).",
+          "title": "Env",
+          "type": "object"
+        }
+      },
+      "required": [
+        "env"
+      ],
+      "title": "ActivationPlan",
+      "type": "object"
+    },
+    "CalibrationReference": {
+      "additionalProperties": false,
+      "properties": {
+        "apcer_max": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Apcer Max"
+        },
+        "bpcer": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bpcer"
+        },
+        "calibration_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Calibration Id"
+        },
+        "detail": {
+          "maxLength": 500,
+          "title": "Detail",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        },
+        "report_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Report Sha256"
+        },
+        "threshold": {
+          "anyOf": [
+            {
+              "exclusiveMaximum": 1.0,
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Threshold"
+        }
+      },
+      "required": [
+        "passed",
+        "detail"
+      ],
+      "title": "CalibrationReference",
+      "type": "object"
+    },
+    "DigestCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "artifacts_verified": {
+          "minimum": 0,
+          "title": "Artifacts Verified",
+          "type": "integer"
+        },
+        "detail": {
+          "maxLength": 500,
+          "title": "Detail",
+          "type": "string"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "passed",
+        "detail",
+        "artifacts_verified"
+      ],
+      "title": "DigestCheck",
+      "type": "object"
+    },
+    "SmokeCheck": {
+      "additionalProperties": false,
+      "properties": {
+        "components": {
+          "minimum": 0,
+          "title": "Components",
+          "type": "integer"
+        },
+        "detail": {
+          "maxLength": 500,
+          "title": "Detail",
+          "type": "string"
+        },
+        "deterministic": {
+          "title": "Deterministic",
+          "type": "boolean"
+        },
+        "images": {
+          "minimum": 0,
+          "title": "Images",
+          "type": "integer"
+        },
+        "max_latency_ms": {
+          "minimum": 0.0,
+          "title": "Max Latency Ms",
+          "type": "number"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "passed",
+        "detail",
+        "images",
+        "components",
+        "deterministic",
+        "max_latency_ms"
+      ],
+      "title": "SmokeCheck",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "activation": {
+      "$ref": "#/$defs/ActivationPlan"
+    },
+    "calibration": {
+      "$ref": "#/$defs/CalibrationReference"
+    },
+    "digests": {
+      "$ref": "#/$defs/DigestCheck"
+    },
+    "manifest_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Manifest Sha256",
+      "type": "string"
+    },
+    "model_id": {
+      "maxLength": 64,
+      "title": "Model Id",
+      "type": "string"
+    },
+    "passed": {
+      "description": "True only if every check passed.",
+      "title": "Passed",
+      "type": "boolean"
+    },
+    "record_type": {
+      "const": "face_liveness_model_validation",
+      "title": "Record Type",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "smoke": {
+      "$ref": "#/$defs/SmokeCheck"
+    },
+    "tool_version": {
+      "title": "Tool Version",
+      "type": "string"
+    },
+    "validated_at": {
+      "format": "date-time",
+      "title": "Validated At",
+      "type": "string"
+    },
+    "version": {
+      "maxLength": 64,
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "record_type",
+    "model_id",
+    "version",
+    "manifest_sha256",
+    "validated_at",
+    "tool_version",
+    "digests",
+    "smoke",
+    "calibration",
+    "passed",
+    "activation"
+  ],
+  "title": "ValidationRecord",
+  "type": "object"
+}

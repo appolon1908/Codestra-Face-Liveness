@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     # When true, a digest mismatch keeps the service not-ready (fail closed).
     # Forced on in production.
     verify_model_digests: bool = True
+    # When true, a non-built-in active version must have a passing validation record
+    # (digest + smoke + calibration reference; see promotion.py) whose calibration id
+    # equals threshold_calibration_id. Default: true in production, false otherwise.
+    require_model_validation: bool | None = None
     onnx_intra_op_threads: int = Field(default=2, ge=1, le=64)
     # Concurrent checks per process; excess requests wait up to busy_timeout_seconds
     # and then get a retryable 503 BUSY. At most max_queued_checks requests may wait;
@@ -63,6 +67,19 @@ class Settings(BaseSettings):
     # Challenge contract (freshness / replay prevention; NOT active liveness)
     challenge_ttl_seconds: int = Field(default=120, ge=10, le=900)
     max_outstanding_challenges: int = Field(default=10_000, ge=1, le=1_000_000)
+
+    # Active liveness provider id (see active.py). Empty = none. No provider ships with
+    # this service, so any non-empty value fails closed until a tested one is added.
+    active_provider: str = ""
+    # Upper bound on frames in one active capture (only used when a provider is available).
+    max_active_frames: int = Field(default=8, ge=1, le=32)
+    # Versioned score-fusion policy (see fusion.py). Unknown ids fail closed.
+    fusion_policy_id: str = "passive-only.v1"
+
+    # Opaque id of the benchmark report whose capacity profile this deployment's
+    # concurrency/timeout settings were taken from. Informational only: the service never
+    # reads benchmark reports and never tunes itself.
+    capacity_profile_id: str = Field(default="", max_length=128)
 
     # Decision policy
     live_threshold: float = Field(default=0.85, gt=0.0, lt=1.0)
@@ -102,6 +119,12 @@ class Settings(BaseSettings):
                     "use LIVENESS_API_TOKEN_FILE in production"
                 )
         return self
+
+    @property
+    def model_validation_required(self) -> bool:
+        if self.env is Environment.PRODUCTION:
+            return True
+        return bool(self.require_model_validation)
 
     @property
     def auth_required(self) -> bool:

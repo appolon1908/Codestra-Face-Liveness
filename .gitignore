@@ -16,3 +16,4 @@ secrets/
 .mypy_cache/
 .ruff_cache/
 *.egg-info/
+benchmark-report.json

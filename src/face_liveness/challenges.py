@@ -26,7 +26,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from .errors import ErrorCode, LivenessError
+from .errors import ErrorCode, Guard, LivenessError
 
 CHALLENGE_PREFIX = "chl_"
 _ID_RE = re.compile(r"^chl_[A-Za-z0-9_\-]{43}$")
@@ -84,7 +84,9 @@ class ChallengeStore:
             now = self.clock()
             self._purge(now)
             if len(self._entries) >= self.capacity:
-                raise LivenessError(ErrorCode.BUSY, "too many outstanding challenges")
+                raise LivenessError(
+                    ErrorCode.BUSY, "too many outstanding challenges", Guard.CHALLENGE_CAPACITY
+                )
             self._entries[self._key(challenge_id)] = _Entry(expires_at=now + self.ttl_seconds)
         issued = datetime.fromtimestamp(self.wall_clock(), UTC)
         return IssuedChallenge(

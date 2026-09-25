@@ -6,10 +6,19 @@ may be installed as ``<model_registry_dir>/*.json``. Exactly one version is acti
 (``LIVENESS_ACTIVE_MODEL_VERSION``, default: built-in). The registry is built once at
 startup and is read-only afterwards.
 
+Lifecycle: ``installed`` (manifest valid, digests verified) -> ``candidate`` (a passing
+validation record exists for this exact manifest digest; see validation_record.py) ->
+``active`` (selected by deployment). When model validation is required (always in
+production), a non-built-in version can only be active if it is a candidate *and* the
+deployed threshold/calibration id match its validation record.
+
 Fail closed: if the active version's manifest is invalid, ambiguous (duplicate version),
-or any of its artifacts is missing or does not match its digest, no model is loaded and
-the service stays not-ready. Invalid *inactive* versions are reported but do not affect
-readiness.
+unvalidated when validation is required, or any of its artifacts is missing or does not
+match its digest, no model is loaded and the service stays not-ready. Invalid *inactive*
+versions are reported but do not affect readiness.
+
+Artifacts are only ever local files under the model dir. There is no download path: a
+manifest ``file`` is a relative path, so a URL is rejected by the schema.
 
 Manifests can only describe passive single-image PAD models. There is no manifest type
 for active liveness; adding one requires a real active model and a new schema version.
@@ -29,6 +38,13 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from .config import Settings
+from .validation_record import (
+    ValidationRecord,
+    activation_error,
+    candidate_error,
+    load_record,
+    record_path,
+)
 
 log = logging.getLogger(__name__)
 
@@ -138,6 +154,7 @@ def builtin_manifest(settings: Settings) -> ModelManifest:
 
 class EntryStatus(StrEnum):
     ACTIVE = "active"
+    CANDIDATE = "candidate"
     INSTALLED = "installed"
     INVALID = "invalid"
 
@@ -150,6 +167,8 @@ class RegistryEntry:
     manifest_sha256: str | None
     digests_verified: bool
     error: str | None
+    validation: ValidationRecord | None = None
+    validation_error: str | None = None
 
     @property
     def version(self) -> str | None:
@@ -265,8 +284,11 @@ def build_registry(settings: Settings) -> ModelRegistry:
     active_version = settings.active_model_version or BUILTIN_MODEL_VERSION
     hash_cache: dict[Path, str] = {}
     entries: list[RegistryEntry] = []
+    active_error = None
     for source, manifest, error in candidates:
         verified = False
+        record: ValidationRecord | None = None
+        record_error: str | None = None
         if manifest is not None and error is None:
             if manifest.version in duplicates:
                 error = f"duplicate model version: {manifest.version}"
@@ -274,10 +296,28 @@ def build_registry(settings: Settings) -> ModelRegistry:
                 verified, error = _verify_artifacts(
                     manifest, settings.model_dir, settings.verify_model_digests, hash_cache
                 )
-        if error is not None:
+        if manifest is not None and error is None:
+            record, record_error = _validation(registry_dir, manifest, verified)
+        if error is not None or manifest is None:
             status = EntryStatus.INVALID
-        elif manifest is not None and manifest.version == active_version:
+        elif manifest.version == active_version:
             status = EntryStatus.ACTIVE
+            if source != BUILTIN_SOURCE and settings.model_validation_required:
+                if record is None or record_error is not None:
+                    gate: str | None = record_error or "no validation record"
+                else:
+                    gate = activation_error(
+                        record,
+                        manifest.version,
+                        manifest.digest,
+                        settings.live_threshold,
+                        settings.threshold_calibration_id,
+                    )
+                if gate is not None:
+                    status = EntryStatus.INSTALLED if record_error else EntryStatus.CANDIDATE
+                    active_error = f"active model version not validated for activation: {gate}"
+        elif record_error is None:
+            status = EntryStatus.CANDIDATE
         else:
             status = EntryStatus.INSTALLED
         entries.append(
@@ -288,11 +328,12 @@ def build_registry(settings: Settings) -> ModelRegistry:
                 manifest_sha256=manifest.digest if manifest is not None else None,
                 digests_verified=verified,
                 error=error,
+                validation=record,
+                validation_error=record_error,
             )
         )
 
-    active_error = None
-    if not any(e.status is EntryStatus.ACTIVE for e in entries):
+    if active_error is None and not any(e.status is EntryStatus.ACTIVE for e in entries):
         matching = [e for e in entries if e.version == active_version]
         active_error = (
             matching[0].error
@@ -302,3 +343,17 @@ def build_registry(settings: Settings) -> ModelRegistry:
     return ModelRegistry(
         entries=tuple(entries), active_version=active_version, active_error=active_error
     )
+
+
+def _validation(
+    registry_dir: Path, manifest: ModelManifest, digests_verified: bool
+) -> tuple[ValidationRecord | None, str | None]:
+    """The version's validation record and why it does not make it a candidate."""
+    try:
+        record = load_record(record_path(registry_dir, manifest.version))
+    except ValueError as exc:
+        return None, str(exc)
+    error = candidate_error(record, manifest.version, manifest.digest)
+    if error is None and not digests_verified:
+        error = "artifact digests not verified"
+    return record, error

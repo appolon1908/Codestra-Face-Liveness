@@ -7,7 +7,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .active import ActiveOutcome
 from .engine import Decision, DecisionReason
+from .fusion import EvidenceKind, FusionStrategy
 from .registry import EntryStatus
 
 PASSIVE_SINGLE_IMAGE: Literal["passive_single_image"] = "passive_single_image"
@@ -27,6 +29,19 @@ class LivenessCheckRequest(BaseModel):
     mode: Literal["passive_single_image"] = Field(
         default=PASSIVE_SINGLE_IMAGE,
         description="Liveness method. Only passive single-image PAD is implemented.",
+    )
+    active_frames_base64: list[str] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=32,
+        description=(
+            "Active-liveness capture: frames recorded while the user followed the "
+            "challenge instructions (same encoding and limits as `image_base64`, at most "
+            "`capabilities.active.max_frames`). Only accepted on challenge verify, and "
+            "only when `capabilities.active.available` is true; otherwise the request "
+            "fails closed with `EVIDENCE_UNAVAILABLE`. No active provider is installed "
+            "today, so this must be omitted."
+        ),
     )
 
 
@@ -55,13 +70,20 @@ class ChallengeEvidence(BaseModel):
     status: Literal["consumed"] = Field(
         description="The challenge was valid, unexpired and unused, and is now spent."
     )
-    active_liveness_evaluated: Literal[False] = Field(
-        default=False,
+    active_liveness_evaluated: bool = Field(
         description=(
-            "Always false: the challenge proves freshness / single use only. No active "
-            "liveness model is installed, so no challenge response was evaluated."
+            "True only if a tested active provider evaluated the challenge response. No "
+            "such provider is installed today, so this is false: the challenge proves "
+            "freshness / single use only."
         ),
     )
+
+
+class ActiveEvidence(BaseModel):
+    provider_id: str
+    provider_version: str
+    outcome: ActiveOutcome
+    score: float | None = Field(ge=0.0, le=1.0)
 
 
 class DecisionEvidence(BaseModel):
@@ -74,17 +96,24 @@ class DecisionEvidence(BaseModel):
     model_version: str
     model_digest: str = Field(description="SHA-256 of the active model manifest.")
     detector_id: str
-    liveness_type: Literal["passive"]
-    active_liveness_evaluated: Literal[False] = False
+    liveness_type: Literal["passive"] = Field(description="Type of the scoring model.")
+    active_liveness_evaluated: bool = Field(
+        description="True only if active evidence contributed to the decision."
+    )
     score: float = Field(ge=0.0, le=1.0, description="Ensemble live score that was thresholded.")
     score_aggregation: Literal["mean_live_probability"]
     threshold: float
     threshold_calibrated: bool
     calibration_id: str | None
     margin: float = Field(description="score - threshold.")
+    policy_id: str = Field(description="Versioned fusion policy that produced `decision`.")
+    evidence_used: list[EvidenceKind]
     decision: Decision
     decision_reason: DecisionReason
     challenge: ChallengeEvidence | None = None
+    active: ActiveEvidence | None = Field(
+        default=None, description="Active provider result; null when none was evaluated."
+    )
 
 
 class ImageInfo(BaseModel):
@@ -114,20 +143,28 @@ class LivenessCheckResponse(BaseModel):
     evidence: DecisionEvidence
 
 
+class ChallengeInstructionOut(BaseModel):
+    action: str = Field(description="Provider-defined user action, e.g. `turn_head_left`.")
+    timeout_seconds: float
+
+
 class ChallengeIssueResponse(BaseModel):
     challenge_id: str = Field(
         description="Opaque, single-use identifier. Treat as a secret; do not log in full."
     )
-    challenge_type: Literal["freshness_nonce"] = Field(
-        description="Only freshness / replay prevention is implemented today."
+    challenge_type: Literal["freshness_nonce", "active_challenge"] = Field(
+        description="`active_challenge` only when a tested active provider is available; "
+        "today always `freshness_nonce` (freshness / replay prevention only)."
     )
     issued_at: datetime
     expires_at: datetime
     ttl_seconds: int
-    instructions: list[str] = Field(
-        description="User actions to perform. Always empty until an active model exists."
+    instructions: list[ChallengeInstructionOut] = Field(
+        description="User actions to perform. Empty unless an active provider is available."
     )
-    active_liveness: Literal[False] = False
+    active_liveness: bool = Field(
+        description="True only if a tested active provider issued instructions. False today."
+    )
     authoritative_method: Literal["passive_single_image"]
 
 
@@ -191,14 +228,55 @@ class ModelInfo(BaseModel):
 
 class ChallengePolicy(BaseModel):
     supported: Literal[True] = True
-    challenge_type: Literal["freshness_nonce"] = "freshness_nonce"
+    challenge_type: Literal["freshness_nonce", "active_challenge"]
     ttl_seconds: int
     single_use: Literal[True] = True
     store: Literal["in_process"] = Field(
         default="in_process",
         description="Verify must reach the replica that issued the challenge.",
     )
-    active_liveness: Literal[False] = False
+    active_liveness: bool
+
+
+class ActiveProviderOut(BaseModel):
+    provider_id: str
+    version: str
+    contract_version: str
+    validation_id: str | None = Field(description="PAD evaluation that tested this provider.")
+
+
+class ActiveLivenessInfo(BaseModel):
+    """Pluggable active (challenge-response) provider slot. Empty today."""
+
+    contract_version: Literal["active-provider.v1"] = "active-provider.v1"
+    available: bool = Field(
+        description="True only if a provider is configured, ready, and names the "
+        "validation report that tested it. No provider ships with this service."
+    )
+    configured_provider_id: str | None
+    provider: ActiveProviderOut | None
+    max_frames: int = Field(description="Upper bound on `active_frames_base64` entries.")
+    reason: str | None = Field(description="Why active liveness is unavailable.")
+
+
+class FusionPolicyOut(BaseModel):
+    policy_id: str = Field(description="Explicit, versioned policy id, e.g. `passive-only.v1`.")
+    strategy: FusionStrategy | None
+    required_evidence: list[EvidenceKind]
+    description: str | None
+    ready: bool = Field(description="False means every assessment fails closed.")
+    reason: str | None
+
+
+class CapacityProfileRef(BaseModel):
+    profile_id: str | None = Field(
+        description="`profile_id` of the benchmark report (face-liveness-benchmark) the "
+        "concurrency and timeout settings were sized from; null if none was recorded."
+    )
+    tested: bool = Field(description="True if a benchmark profile is referenced.")
+    auto_tuned: Literal[False] = Field(
+        default=False, description="Always false: the service never tunes itself."
+    )
 
 
 class ResourceLimits(BaseModel):
@@ -207,6 +285,7 @@ class ResourceLimits(BaseModel):
     busy_timeout_seconds: float
     request_timeout_seconds: float
     max_request_bytes: int
+    capacity_profile: CapacityProfileRef
 
 
 class CapabilitiesResponse(BaseModel):
@@ -218,9 +297,11 @@ class CapabilitiesResponse(BaseModel):
     unsupported: list[str]
     passive_liveness: bool
     active_liveness: bool = Field(
-        description="True only if the active model version performs active liveness. "
-        "No such model exists today, so this is always false."
+        description="True only if a tested active provider is available "
+        "(`active.available`). No such provider exists today, so this is false."
     )
+    active: ActiveLivenessInfo
+    fusion: FusionPolicyOut
     challenge: ChallengePolicy
     input: InputLimits
     limits: ResourceLimits
@@ -240,10 +321,23 @@ class StatusResponse(BaseModel):
     active_model_version: str | None
 
 
+class ValidationOut(BaseModel):
+    passed: bool
+    validated_at: datetime
+    calibration_id: str | None
+    threshold: float | None
+    digests_passed: bool
+    smoke_passed: bool
+    calibration_passed: bool
+
+
 class ModelVersionOut(BaseModel):
     model_id: str | None
     version: str | None
-    status: EntryStatus
+    status: EntryStatus = Field(
+        description="`installed` (digests verified) -> `candidate` (passing validation "
+        "record) -> `active` (selected by deployment); `invalid` never loads."
+    )
     source: str = Field(description="`builtin` or `registry/<file>.json`.")
     liveness_type: Literal["passive"] | None
     manifest_sha256: str | None
@@ -251,6 +345,10 @@ class ModelVersionOut(BaseModel):
     error: str | None
     license: str | None
     artifacts: list[ArtifactOut]
+    validation: ValidationOut | None = Field(
+        description="Validation record for this exact manifest, if any."
+    )
+    validation_error: str | None = Field(description="Why this version is not (yet) a candidate.")
 
 
 class ModelRegistryResponse(BaseModel):

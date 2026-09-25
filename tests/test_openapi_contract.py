@@ -55,10 +55,27 @@ def test_contract_covers_required_endpoints():
     assert set(paths["/v1/models/{version}"]) == {"get"}
 
 
-def test_contract_never_claims_active_liveness():
+def test_contract_keeps_scoring_model_passive():
     schemas = yaml.safe_load(SPEC.read_text())["components"]["schemas"]
-    assert schemas["ChallengeIssueResponse"]["properties"]["active_liveness"]["const"] is False
-    assert schemas["ChallengePolicy"]["properties"]["active_liveness"]["const"] is False
     evidence = schemas["DecisionEvidence"]["properties"]
-    assert evidence["active_liveness_evaluated"]["const"] is False
+    # Models are passive by schema; active evidence can only come from a provider.
     assert evidence["liveness_type"]["const"] == "passive"
+    assert "policy_id" in schemas["DecisionEvidence"]["required"]
+    active = schemas["ActiveLivenessInfo"]["properties"]
+    assert active["contract_version"]["const"] == "active-provider.v1"
+    assert schemas["CapacityProfileRef"]["properties"]["auto_tuned"]["const"] is False
+
+
+def test_default_service_never_claims_active_liveness(client, image_b64):
+    caps = client.get("/v1/capabilities").json()
+    assert caps["active_liveness"] is False
+    assert caps["active"]["available"] is False
+    assert caps["challenge"]["active_liveness"] is False
+    issued = client.post("/v1/liveness/challenges").json()
+    assert issued["active_liveness"] is False and issued["instructions"] == []
+    body = client.post(
+        f"/v1/liveness/challenges/{issued['challenge_id']}/verify",
+        json={"image_base64": image_b64},
+    ).json()
+    assert body["evidence"]["active_liveness_evaluated"] is False
+    assert body["evidence"]["challenge"]["active_liveness_evaluated"] is False

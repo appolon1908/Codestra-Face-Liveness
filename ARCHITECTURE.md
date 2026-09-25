@@ -35,8 +35,13 @@ Service-local capabilities (no cross-system effects):
 - POST /v1/liveness/check, POST /v1/liveness/challenges, POST /v1/liveness/challenges/{id}/verify
 - GET /v1/models, GET /v1/models/{version} (read-only registry; activation is a deployment action)
 
-Liveness strength is stated, never inflated: the passive model is authoritative, challenges are
-freshness/replay nonces, and active_liveness stays false until a real active model exists.
+Liveness strength is stated, never inflated: the passive model decides under the versioned
+fusion policy passive-only.v1, challenges are freshness/replay nonces, and active_liveness
+stays false until a real, tested active provider is plugged into the active-provider.v1
+interface. A policy requiring unavailable evidence fails closed. Model versions are promoted
+installed -> candidate (digest + smoke + calibration reference) -> active by local operator
+action only. Benchmarks and calibration reports are evidence for humans; the service never
+reads them. Telemetry labels come from closed sets only (docs/TELEMETRY.md).
 Challenge state is per process (no shared store), so Middleware V3 routes verify calls to the
 issuing replica. Calibration is offline and never auto-promotes a threshold.
 

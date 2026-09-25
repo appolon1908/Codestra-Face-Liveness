@@ -12,7 +12,7 @@ import numpy as np
 from numpy.typing import NDArray
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from .errors import ErrorCode, LivenessError
+from .errors import ErrorCode, Guard, LivenessError
 
 ALLOWED_FORMATS: dict[str, str] = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
 
@@ -61,7 +61,9 @@ def decode_base64(data: str, max_bytes: int) -> bytes:
         _, _, data = data.partition(",")
     # Cheap pre-check before allocating the decoded buffer.
     if len(data) * 3 // 4 > max_bytes + 3:
-        raise LivenessError(ErrorCode.PAYLOAD_TOO_LARGE, f"image exceeds {max_bytes} bytes")
+        raise LivenessError(
+            ErrorCode.PAYLOAD_TOO_LARGE, f"image exceeds {max_bytes} bytes", Guard.IMAGE_BYTES
+        )
     try:
         raw = base64.b64decode(data, validate=True)
     except (binascii.Error, ValueError) as exc:
@@ -69,7 +71,9 @@ def decode_base64(data: str, max_bytes: int) -> bytes:
     if not raw:
         raise LivenessError(ErrorCode.INVALID_IMAGE, "image is empty")
     if len(raw) > max_bytes:
-        raise LivenessError(ErrorCode.PAYLOAD_TOO_LARGE, f"image exceeds {max_bytes} bytes")
+        raise LivenessError(
+            ErrorCode.PAYLOAD_TOO_LARGE, f"image exceeds {max_bytes} bytes", Guard.IMAGE_BYTES
+        )
     return raw
 
 
@@ -99,10 +103,16 @@ def decode_image(
                 )
             width, height = img.size
             if max(width, height) > max_side:
-                raise LivenessError(ErrorCode.PAYLOAD_TOO_LARGE, f"image side exceeds {max_side}px")
+                raise LivenessError(
+                    ErrorCode.PAYLOAD_TOO_LARGE,
+                    f"image side exceeds {max_side}px",
+                    Guard.IMAGE_DIMENSIONS,
+                )
             if width * height > max_pixels:
                 raise LivenessError(
-                    ErrorCode.PAYLOAD_TOO_LARGE, f"image exceeds {max_pixels} pixels"
+                    ErrorCode.PAYLOAD_TOO_LARGE,
+                    f"image exceeds {max_pixels} pixels",
+                    Guard.IMAGE_PIXELS,
                 )
             if (
                 max_decoded_bytes is not None
@@ -111,6 +121,7 @@ def decode_image(
                 raise LivenessError(
                     ErrorCode.PAYLOAD_TOO_LARGE,
                     f"decoded image would exceed {max_decoded_bytes} bytes",
+                    Guard.DECODED_BYTES,
                 )
             if getattr(img, "n_frames", 1) > 1:
                 raise LivenessError(
@@ -123,7 +134,9 @@ def decode_image(
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
         raise LivenessError(ErrorCode.INVALID_IMAGE, "image could not be decoded") from exc
     except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
-        raise LivenessError(ErrorCode.PAYLOAD_TOO_LARGE, "image exceeds pixel limit") from exc
+        raise LivenessError(
+            ErrorCode.PAYLOAD_TOO_LARGE, "image exceeds pixel limit", Guard.IMAGE_PIXELS
+        ) from exc
 
     if min(rgb.size) < min_side:
         raise LivenessError(

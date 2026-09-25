@@ -1,8 +1,38 @@
-"""Prometheus metrics on a service-private registry."""
+"""Prometheus metrics on a service-private registry.
+
+Cardinality / privacy policy (docs/TELEMETRY.md): every label value comes from a closed
+enum (decision, reason, error code, stage, guard, event), a route template, or the one
+active model version / fusion policy id fixed at startup. Request data never becomes a
+label: no request or challenge ids, subject ids or names, image hashes, client
+addresses, or scores (scores are only observed into fixed histogram buckets).
+"""
 
 from __future__ import annotations
 
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, Info
+
+# The only label names any metric may use (enforced by tests/test_telemetry.py).
+ALLOWED_LABEL_NAMES = frozenset(
+    {
+        "route",
+        "method",
+        "status",
+        "outcome",
+        "stage",
+        "code",
+        "event",
+        "decision",
+        "reason",
+        "model_version",
+        "policy_id",
+        "guard",
+        # Info metrics: one series each, identity of the running build/model.
+        "version",
+        "manifest_sha256",
+        "model",
+        "detector",
+    }
+)
 
 
 class Metrics:
@@ -35,8 +65,43 @@ class Metrics:
         )
         self.live_score = Histogram(
             "liveness_live_score",
-            "Distribution of ensemble live scores (for drift and calibration monitoring).",
+            "Distribution of passive live scores by model version (drift / calibration "
+            "monitoring). Scores are bucketed, never used as label values.",
+            ["model_version"],
             buckets=(0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.95, 0.99, 1.0),
+            registry=self.registry,
+        )
+        self.decisions = Counter(
+            "liveness_decisions_total",
+            "Completed assessments by final decision, decision reason, model version and "
+            "fusion policy.",
+            ["decision", "reason", "model_version", "policy_id"],
+            registry=self.registry,
+        )
+        self.decision_duration = Histogram(
+            "liveness_decision_duration_seconds",
+            "Server-side time from request receipt to a completed assessment.",
+            ["decision", "model_version"],
+            buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
+            registry=self.registry,
+        )
+        self.guard_rejections = Counter(
+            "liveness_guard_rejections_total",
+            "Requests rejected by a resource guard: request_body, image_bytes, "
+            "image_dimensions, image_pixels, decoded_bytes (size); queue_full, "
+            "queue_timeout, challenge_capacity (concurrency); deadline (timeout).",
+            ["guard"],
+            registry=self.registry,
+        )
+        self.fusion_policy_ready = Gauge(
+            "liveness_fusion_policy_ready",
+            "1 if the configured fusion policy has all the evidence it requires, else 0.",
+            ["policy_id"],
+            registry=self.registry,
+        )
+        self.active_provider_available = Gauge(
+            "liveness_active_provider_available",
+            "1 if a tested active liveness provider is available, else 0.",
             registry=self.registry,
         )
         self.model_ready = Gauge(

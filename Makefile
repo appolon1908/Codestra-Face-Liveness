@@ -1,7 +1,7 @@
 PY ?= .venv/bin/python
 MODEL_DIR ?= models
 
-.PHONY: venv models test lint typecheck check openapi run docker compose-up
+.PHONY: venv models test lint typecheck check openapi run docker compose-up benchmark models-list
 
 venv:
 	python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt && .venv/bin/pip install --no-deps -e .
@@ -25,6 +25,12 @@ check: lint typecheck test
 
 openapi:
 	$(PY) tools/export_openapi.py
+
+models-list:  ## installed / candidate / active model versions
+	$(PY) -m face_liveness.promotion --model-dir $(MODEL_DIR) list
+
+benchmark:  ## offline capacity profile (never applied automatically)
+	$(PY) -m face_liveness.benchmark --model-dir $(MODEL_DIR) --out benchmark-report.json
 
 run:
 	LIVENESS_MODEL_DIR=$(MODEL_DIR) $(PY) -m face_liveness.main

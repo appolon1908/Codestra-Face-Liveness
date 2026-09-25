@@ -24,6 +24,10 @@ class Decision(StrEnum):
 class DecisionReason(StrEnum):
     SCORE_AT_OR_ABOVE_THRESHOLD = "score_at_or_above_threshold"
     SCORE_BELOW_THRESHOLD = "score_below_threshold"
+    # Fusion policies that combine passive and active evidence (see fusion.py).
+    ALL_REQUIRED_EVIDENCE_PASSED = "all_required_evidence_passed"
+    ACTIVE_CHALLENGE_FAILED = "active_challenge_failed"
+    ACTIVE_SCORE_BELOW_MINIMUM = "active_score_below_minimum"
 
 
 @dataclass(frozen=True, slots=True)
