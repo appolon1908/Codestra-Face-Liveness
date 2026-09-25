@@ -13,6 +13,7 @@ from PIL import Image
 from face_liveness.api import create_app
 from face_liveness.config import Environment, Settings
 from face_liveness.inference import ComponentScore, FaceBox
+from face_liveness.registry import ModelRegistry, builtin_manifest
 from face_liveness.runtime import ModelRuntime
 
 
@@ -49,6 +50,16 @@ class FakeClassifier:
             ComponentScore(name=n, live_score=s)
             for n, s in zip(self.component_names, self.scores, strict=True)
         ]
+
+
+def fake_runtime(detector: FakeDetector, classifier: FakeClassifier) -> ModelRuntime:
+    manifest = builtin_manifest(Settings(env=Environment.TEST))
+    return ModelRuntime(
+        detector=detector,
+        classifier=classifier,
+        manifest=manifest,
+        registry=ModelRegistry.single(manifest),
+    )
 
 
 def encode_image(fmt: str = "PNG", size: tuple[int, int] = (240, 240), seed: int = 0) -> bytes:
@@ -90,7 +101,7 @@ def make_client(
     clients: list[TestClient] = []
 
     def _make(runtime: ModelRuntime | None = None, settings_: Settings | None = None) -> TestClient:
-        rt = runtime or ModelRuntime(detector=detector, classifier=classifier)
+        rt = runtime or fake_runtime(detector, classifier)
         client = TestClient(create_app(settings_ or settings, rt))
         client.__enter__()
         clients.append(client)

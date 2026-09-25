@@ -1,0 +1,399 @@
+{
+  "$defs": {
+    "CalibrationPolicy": {
+      "properties": {
+        "min_bona_fide": {
+          "title": "Min Bona Fide",
+          "type": "integer"
+        },
+        "min_per_species": {
+          "title": "Min Per Species",
+          "type": "integer"
+        },
+        "min_threshold": {
+          "title": "Min Threshold",
+          "type": "number"
+        },
+        "target_apcer": {
+          "title": "Target Apcer",
+          "type": "number"
+        },
+        "threshold_step": {
+          "title": "Threshold Step",
+          "type": "number"
+        }
+      },
+      "required": [
+        "target_apcer",
+        "min_threshold",
+        "threshold_step",
+        "min_bona_fide",
+        "min_per_species"
+      ],
+      "title": "CalibrationPolicy",
+      "type": "object"
+    },
+    "DatasetInfo": {
+      "properties": {
+        "attack_scored": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Attack Scored",
+          "type": "object"
+        },
+        "bona_fide_scored": {
+          "title": "Bona Fide Scored",
+          "type": "integer"
+        },
+        "fingerprint_sha256": {
+          "description": "SHA-256 over the sorted (label, species, image SHA-256) triples. Independent of file names and order; changes if any image or label changes.",
+          "title": "Fingerprint Sha256",
+          "type": "string"
+        },
+        "images_total": {
+          "title": "Images Total",
+          "type": "integer"
+        },
+        "rejected_before_scoring": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "description": "Counts keyed by `<label or species>:<error code>`.",
+          "title": "Rejected Before Scoring",
+          "type": "object"
+        }
+      },
+      "required": [
+        "fingerprint_sha256",
+        "images_total",
+        "bona_fide_scored",
+        "attack_scored",
+        "rejected_before_scoring"
+      ],
+      "title": "DatasetInfo",
+      "type": "object"
+    },
+    "Label": {
+      "enum": [
+        "bona_fide",
+        "attack"
+      ],
+      "title": "Label",
+      "type": "string"
+    },
+    "ModelIdentity": {
+      "properties": {
+        "detector_id": {
+          "title": "Detector Id",
+          "type": "string"
+        },
+        "manifest_sha256": {
+          "title": "Manifest Sha256",
+          "type": "string"
+        },
+        "model_id": {
+          "title": "Model Id",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "model_id",
+        "version",
+        "manifest_sha256",
+        "detector_id"
+      ],
+      "title": "ModelIdentity",
+      "type": "object"
+    },
+    "OperatingPoint": {
+      "properties": {
+        "apcer_by_species": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Apcer By Species",
+          "type": "object"
+        },
+        "apcer_max": {
+          "description": "Worst-species APCER: FAR-like spoof acceptance rate.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Apcer Max",
+          "type": "number"
+        },
+        "bpcer": {
+          "description": "BPCER: FRR-like live rejection rate.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Bpcer",
+          "type": "number"
+        },
+        "threshold": {
+          "title": "Threshold",
+          "type": "number"
+        }
+      },
+      "required": [
+        "threshold",
+        "apcer_max",
+        "apcer_by_species",
+        "bpcer"
+      ],
+      "title": "OperatingPoint",
+      "type": "object"
+    },
+    "PipelineSettings": {
+      "description": "Settings that change which images are scored; must match the target deployment.",
+      "properties": {
+        "detector_score_threshold": {
+          "title": "Detector Score Threshold",
+          "type": "number"
+        },
+        "min_face_size_px": {
+          "title": "Min Face Size Px",
+          "type": "integer"
+        },
+        "min_image_side_px": {
+          "title": "Min Image Side Px",
+          "type": "integer"
+        },
+        "secondary_face_area_ratio": {
+          "title": "Secondary Face Area Ratio",
+          "type": "number"
+        }
+      },
+      "required": [
+        "detector_score_threshold",
+        "min_face_size_px",
+        "min_image_side_px",
+        "secondary_face_area_ratio"
+      ],
+      "title": "PipelineSettings",
+      "type": "object"
+    },
+    "Promotion": {
+      "properties": {
+        "auto_promoted": {
+          "const": false,
+          "default": false,
+          "description": "Always false: reports are never applied automatically.",
+          "title": "Auto Promoted",
+          "type": "boolean"
+        },
+        "blockers": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Blockers",
+          "type": "array"
+        },
+        "eligible_for_review": {
+          "title": "Eligible For Review",
+          "type": "boolean"
+        },
+        "note": {
+          "title": "Note",
+          "type": "string"
+        },
+        "status": {
+          "const": "candidate_only",
+          "default": "candidate_only",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "eligible_for_review",
+        "blockers",
+        "note"
+      ],
+      "title": "Promotion",
+      "type": "object"
+    },
+    "ScoreSummary": {
+      "properties": {
+        "count": {
+          "title": "Count",
+          "type": "integer"
+        },
+        "max": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Max"
+        },
+        "mean": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Mean"
+        },
+        "median": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Median"
+        },
+        "min": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Min"
+        },
+        "p05": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "P05"
+        },
+        "p95": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "P95"
+        }
+      },
+      "required": [
+        "count",
+        "min",
+        "p05",
+        "median",
+        "p95",
+        "max",
+        "mean"
+      ],
+      "title": "ScoreSummary",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "calibration_id": {
+      "title": "Calibration Id",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "dataset": {
+      "$ref": "#/$defs/DatasetInfo"
+    },
+    "equal_error_rate": {
+      "$ref": "#/$defs/OperatingPoint",
+      "description": "Grid point where worst-species APCER and BPCER are closest (approx EER)."
+    },
+    "model": {
+      "$ref": "#/$defs/ModelIdentity"
+    },
+    "operating_points": {
+      "items": {
+        "$ref": "#/$defs/OperatingPoint"
+      },
+      "title": "Operating Points",
+      "type": "array"
+    },
+    "pipeline": {
+      "$ref": "#/$defs/PipelineSettings"
+    },
+    "policy": {
+      "$ref": "#/$defs/CalibrationPolicy"
+    },
+    "promotion": {
+      "$ref": "#/$defs/Promotion"
+    },
+    "report_type": {
+      "const": "face_liveness_calibration",
+      "title": "Report Type",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "score_summary": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ScoreSummary"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/Label"
+      },
+      "title": "Score Summary",
+      "type": "object"
+    },
+    "sufficient_sample_size": {
+      "title": "Sufficient Sample Size",
+      "type": "boolean"
+    },
+    "threshold_candidate": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OperatingPoint"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Smallest threshold meeting the APCER target; null if none does."
+    },
+    "tool_version": {
+      "title": "Tool Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "report_type",
+    "calibration_id",
+    "created_at",
+    "tool_version",
+    "model",
+    "pipeline",
+    "dataset",
+    "policy",
+    "score_summary",
+    "equal_error_rate",
+    "operating_points",
+    "threshold_candidate",
+    "sufficient_sample_size",
+    "promotion"
+  ],
+  "title": "CalibrationReport",
+  "type": "object"
+}

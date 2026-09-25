@@ -41,14 +41,28 @@ class Settings(BaseSettings):
     minifasnet_v2_sha256: str = MINIFASNET_V2_SHA256
     minifasnet_v1se_file: str = "minifasnet_v1se_4.0_80x80.onnx"
     minifasnet_v1se_sha256: str = MINIFASNET_V1SE_SHA256
+    # Model registry: additional installed versions are described by manifests in
+    # <model_registry_dir>/*.json (default <model_dir>/registry). Exactly one version is
+    # active; empty means the built-in version described by the settings above.
+    model_registry_dir: Path | None = None
+    active_model_version: str = ""
     # When true, a digest mismatch keeps the service not-ready (fail closed).
     # Forced on in production.
     verify_model_digests: bool = True
     onnx_intra_op_threads: int = Field(default=2, ge=1, le=64)
     # Concurrent checks per process; excess requests wait up to busy_timeout_seconds
-    # and then get a retryable 503 BUSY.
+    # and then get a retryable 503 BUSY. At most max_queued_checks requests may wait;
+    # beyond that, requests are rejected immediately.
     max_concurrent_checks: int = Field(default=4, ge=1, le=256)
+    max_queued_checks: int = Field(default=8, ge=0, le=1024)
     busy_timeout_seconds: float = Field(default=2.0, ge=0.0, le=60.0)
+    # Total server-side budget for one check (queueing + decode + inference). A check
+    # that exceeds it returns a retryable 503 DEADLINE_EXCEEDED, never a late decision.
+    request_timeout_seconds: float = Field(default=10.0, gt=0.0, le=120.0)
+
+    # Challenge contract (freshness / replay prevention; NOT active liveness)
+    challenge_ttl_seconds: int = Field(default=120, ge=10, le=900)
+    max_outstanding_challenges: int = Field(default=10_000, ge=1, le=1_000_000)
 
     # Decision policy
     live_threshold: float = Field(default=0.85, gt=0.0, lt=1.0)
@@ -67,6 +81,10 @@ class Settings(BaseSettings):
     # Input limits
     max_image_bytes: int = Field(default=5 * 1024 * 1024, ge=1024)
     max_image_pixels: int = Field(default=25_000_000, ge=10_000)
+    max_image_side_px: int = Field(default=8192, ge=128, le=65_535)
+    # Upper bound on peak bitmap memory for one decode (checked from the header, before
+    # any pixel data is decompressed). 192 MiB admits ~16 MP RGB (12 MP phone photos).
+    max_decoded_bytes: int = Field(default=192 * 1024 * 1024, ge=64 * 1024)
     min_image_side_px: int = Field(default=112, ge=32)
 
     # Caller authentication (the only expected caller is Middleware V3)
@@ -103,6 +121,10 @@ class Settings(BaseSettings):
         if self.api_token is not None:
             return self.api_token.get_secret_value() or None
         return None
+
+    @property
+    def resolved_model_registry_dir(self) -> Path:
+        return self.model_registry_dir or self.model_dir / "registry"
 
     @property
     def max_request_bytes(self) -> int:

@@ -32,6 +32,9 @@ RUN pip install --no-cache-dir --no-deps . && rm -rf /app/src /app/build
 COPY --from=models /build/models/*.onnx /models/
 COPY --from=models /build/models/manifest.json /models/manifest.json
 COPY --from=models /build/models/upstream/LICENSE.* /models/licenses/
+# The built-in model version (1.0.0) is described by the pinned digests in the package.
+# Further versions are installed by mounting manifests at /models/registry/*.json and
+# their artifacts under /models (read-only); see docs/OPERATIONS.md.
 USER 10001:10001
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \

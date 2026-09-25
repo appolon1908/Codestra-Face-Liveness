@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from face_liveness import config
 from face_liveness.config import Environment, Settings
-from face_liveness.runtime import ArtifactInfo, ModelRuntime
+from face_liveness.runtime import ModelRuntime
 
 
 def test_healthz(client):
@@ -25,13 +26,8 @@ def test_readyz_not_ready_when_model_unavailable(make_client):
     assert client.get("/healthz").status_code == 200
 
 
-def test_capabilities(make_client, detector, classifier):
-    rt = ModelRuntime(
-        detector=detector,
-        classifier=classifier,
-        artifacts=[ArtifactInfo(name="detector", file="d.onnx", sha256="ab" * 32)],
-    )
-    body = make_client(runtime=rt).get("/v1/capabilities").json()
+def test_capabilities(client):
+    body = client.get("/v1/capabilities").json()
     assert body["ready"] is True
     assert [m["id"] for m in body["methods"]] == ["passive_single_image"]
     assert "face_matching" in body["unsupported"]
@@ -40,7 +36,17 @@ def test_capabilities(make_client, detector, classifier):
     assert body["decision"]["threshold"] == 0.85
     assert body["decision"]["threshold_calibrated"] is False
     assert body["input"]["faces_required"] == 1
-    assert body["model"]["artifacts"][0]["sha256"] == "ab" * 32
+    assert body["model"]["artifacts"][0]["sha256"] == config.YUNET_SHA256
+    assert body["model"]["version"] == "1.0.0"
+    assert len(body["model"]["manifest_sha256"]) == 64
+    # Challenges exist as a contract, but no active liveness model is installed.
+    assert body["active_liveness"] is False
+    assert body["passive_liveness"] is True
+    assert body["challenge"]["active_liveness"] is False
+    assert body["challenge"]["single_use"] is True
+    assert "active_challenge" in body["unsupported"]
+    assert body["limits"]["max_queued_checks"] == 8
+    assert body["input"]["max_image_side_px"] == 8192
 
 
 def test_capabilities_reports_calibration(make_client):

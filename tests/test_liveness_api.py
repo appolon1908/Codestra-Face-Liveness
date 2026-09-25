@@ -240,12 +240,8 @@ def test_nan_score_fails_closed(client, classifier, image_b64):
 def test_busy_returns_retryable_503(make_client, image_b64):
     s = Settings(env=Environment.TEST, max_concurrent_checks=1, busy_timeout_seconds=0)
     client = make_client(settings_=s)
-    slots = client.app.state.check_slots  # hold the only slot from outside the request
-    slots.acquire()
-    try:
+    with client.app.state.admission.slot(timeout=0):  # hold the only slot from outside
         resp = client.post(CHECK, json={"image_base64": image_b64})
-    finally:
-        slots.release()
     assert resp.status_code == 503
     assert _err(resp)["code"] == "BUSY"
     assert resp.headers["Retry-After"] == "1"

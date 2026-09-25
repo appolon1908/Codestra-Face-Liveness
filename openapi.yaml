@@ -3,10 +3,12 @@ info:
   title: Codestra Face Liveness API
   description: 'Standalone passive presentation-attack-detection (PAD) service for Codestra FACE-ID. It
     answers one question: is the single face in this image a bona fide live capture or a presentation
-    attack (print, screen replay, mask)? It does NOT perform face matching or identity verification. The
-    only supported caller is Middleware V3, which owns authentication normalisation, policy, orchestration
-    and cross-system audit. Images are processed in memory and never persisted.'
-  version: 0.2.0
+    attack (print, screen replay, mask)? It does NOT perform face matching or identity verification, and
+    it does NOT perform active (challenge-response) liveness: challenges are freshness / replay nonces
+    only and the passive model decision is authoritative. The only supported caller is Middleware V3,
+    which owns authentication normalisation, policy, orchestration and cross-system audit. Images are
+    processed in memory and never persisted.'
+  version: 0.3.0
 servers:
 - url: http://localhost:8080
   description: Local development
@@ -111,6 +113,106 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /v1/models:
+    get:
+      tags:
+      - models
+      summary: List Models
+      description: 'Installed model versions, their validation status, and which one is active.
+
+
+        Read-only: the registry is built and verified at startup. Changing the active
+
+        version is a deployment action (`LIVENESS_ACTIVE_MODEL_VERSION`), not an API call.'
+      operationId: listModels
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelRegistryResponse'
+        '401':
+          description: 'Error codes: UNAUTHORIZED'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/models/{version}:
+    get:
+      tags:
+      - models
+      summary: Get Model
+      description: One installed model version.
+      operationId: getModel
+      parameters:
+      - name: version
+        in: path
+        required: true
+        schema:
+          type: string
+          maxLength: 64
+          title: Version
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelVersionOut'
+        '401':
+          description: 'Error codes: UNAUTHORIZED'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 'Error codes: NOT_FOUND'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/liveness/challenges:
+    post:
+      tags:
+      - liveness
+      summary: Issue Challenge
+      description: 'Issue a short-lived, single-use challenge.
+
+
+        Today this is a freshness / replay-prevention nonce only: it has no instructions
+
+        and does not make the check *active* liveness. Verify it with
+
+        `POST /v1/liveness/challenges/{challenge_id}/verify`; the passive model decision
+
+        is authoritative.'
+      operationId: issueChallenge
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChallengeIssueResponse'
+        '401':
+          description: 'Error codes: UNAUTHORIZED'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 'Error codes: BUSY'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /v1/liveness/check:
     post:
       tags:
@@ -177,7 +279,104 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: 'Error codes: MODEL_UNAVAILABLE, BUSY, INFERENCE_FAILED'
+          description: 'Error codes: MODEL_UNAVAILABLE, BUSY, DEADLINE_EXCEEDED, INFERENCE_FAILED'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/liveness/challenges/{challenge_id}/verify:
+    post:
+      tags:
+      - liveness
+      summary: Verify Challenge
+      description: 'Consume a challenge and run the passive check on the submitted capture.
+
+
+        The challenge is spent by the first verify attempt whatever its outcome (issue a
+
+        new one to retry). Unknown, expired or already-used challenges fail closed with
+
+        no assessment. A `200` carries the same passive decision as `/v1/liveness/check`
+
+        plus `evidence.challenge`; `active_liveness_evaluated` is always false.'
+      operationId: verifyChallenge
+      parameters:
+      - name: challenge_id
+        in: path
+        required: true
+        schema:
+          type: string
+          maxLength: 128
+          title: Challenge Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LivenessCheckRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LivenessCheckResponse'
+        '400':
+          description: 'Error codes: INVALID_REQUEST'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 'Error codes: UNAUTHORIZED'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 'Error codes: CHALLENGE_NOT_FOUND'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 'Error codes: CHALLENGE_ALREADY_USED'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          description: 'Error codes: CHALLENGE_EXPIRED'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: 'Error codes: PAYLOAD_TOO_LARGE'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '415':
+          description: 'Error codes: UNSUPPORTED_MEDIA_TYPE'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: 'Error codes: INVALID_IMAGE, IMAGE_TOO_SMALL, NO_FACE, MULTIPLE_FACES, FACE_TOO_SMALL'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: 'Error codes: INTERNAL_ERROR'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: 'Error codes: MODEL_UNAVAILABLE, BUSY, DEADLINE_EXCEEDED, INFERENCE_FAILED'
           content:
             application/json:
               schema:
@@ -227,8 +426,20 @@ components:
             type: string
           type: array
           title: Unsupported
+        passive_liveness:
+          type: boolean
+          title: Passive Liveness
+        active_liveness:
+          type: boolean
+          title: Active Liveness
+          description: True only if the active model version performs active liveness. No such model exists
+            today, so this is always false.
+        challenge:
+          $ref: '#/components/schemas/ChallengePolicy'
         input:
           $ref: '#/components/schemas/InputLimits'
+        limits:
+          $ref: '#/components/schemas/ResourceLimits'
         decision:
           $ref: '#/components/schemas/DecisionPolicy'
         model:
@@ -250,10 +461,118 @@ components:
       - ready
       - methods
       - unsupported
+      - passive_liveness
+      - active_liveness
+      - challenge
       - input
+      - limits
       - decision
       - model
       title: CapabilitiesResponse
+    ChallengeEvidence:
+      properties:
+        challenge_id:
+          type: string
+          title: Challenge Id
+        status:
+          type: string
+          const: consumed
+          title: Status
+          description: The challenge was valid, unexpired and unused, and is now spent.
+        active_liveness_evaluated:
+          type: boolean
+          const: false
+          title: Active Liveness Evaluated
+          description: 'Always false: the challenge proves freshness / single use only. No active liveness
+            model is installed, so no challenge response was evaluated.'
+          default: false
+      type: object
+      required:
+      - challenge_id
+      - status
+      title: ChallengeEvidence
+    ChallengeIssueResponse:
+      properties:
+        challenge_id:
+          type: string
+          title: Challenge Id
+          description: Opaque, single-use identifier. Treat as a secret; do not log in full.
+        challenge_type:
+          type: string
+          const: freshness_nonce
+          title: Challenge Type
+          description: Only freshness / replay prevention is implemented today.
+        issued_at:
+          type: string
+          format: date-time
+          title: Issued At
+        expires_at:
+          type: string
+          format: date-time
+          title: Expires At
+        ttl_seconds:
+          type: integer
+          title: Ttl Seconds
+        instructions:
+          items:
+            type: string
+          type: array
+          title: Instructions
+          description: User actions to perform. Always empty until an active model exists.
+        active_liveness:
+          type: boolean
+          const: false
+          title: Active Liveness
+          default: false
+        authoritative_method:
+          type: string
+          const: passive_single_image
+          title: Authoritative Method
+      type: object
+      required:
+      - challenge_id
+      - challenge_type
+      - issued_at
+      - expires_at
+      - ttl_seconds
+      - instructions
+      - authoritative_method
+      title: ChallengeIssueResponse
+    ChallengePolicy:
+      properties:
+        supported:
+          type: boolean
+          const: true
+          title: Supported
+          default: true
+        challenge_type:
+          type: string
+          const: freshness_nonce
+          title: Challenge Type
+          default: freshness_nonce
+        ttl_seconds:
+          type: integer
+          title: Ttl Seconds
+        single_use:
+          type: boolean
+          const: true
+          title: Single Use
+          default: true
+        store:
+          type: string
+          const: in_process
+          title: Store
+          description: Verify must reach the replica that issued the challenge.
+          default: in_process
+        active_liveness:
+          type: boolean
+          const: false
+          title: Active Liveness
+          default: false
+      type: object
+      required:
+      - ttl_seconds
+      title: ChallengePolicy
     ComponentScoreOut:
       properties:
         name:
@@ -275,6 +594,83 @@ components:
       - live
       - spoof
       title: Decision
+    DecisionEvidence:
+      properties:
+        model_id:
+          type: string
+          title: Model Id
+        model_version:
+          type: string
+          title: Model Version
+        model_digest:
+          type: string
+          title: Model Digest
+          description: SHA-256 of the active model manifest.
+        detector_id:
+          type: string
+          title: Detector Id
+        liveness_type:
+          type: string
+          const: passive
+          title: Liveness Type
+        active_liveness_evaluated:
+          type: boolean
+          const: false
+          title: Active Liveness Evaluated
+          default: false
+        score:
+          type: number
+          maximum: 1.0
+          minimum: 0.0
+          title: Score
+          description: Ensemble live score that was thresholded.
+        score_aggregation:
+          type: string
+          const: mean_live_probability
+          title: Score Aggregation
+        threshold:
+          type: number
+          title: Threshold
+        threshold_calibrated:
+          type: boolean
+          title: Threshold Calibrated
+        calibration_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Calibration Id
+        margin:
+          type: number
+          title: Margin
+          description: score - threshold.
+        decision:
+          $ref: '#/components/schemas/Decision'
+        decision_reason:
+          $ref: '#/components/schemas/DecisionReason'
+        challenge:
+          anyOf:
+          - $ref: '#/components/schemas/ChallengeEvidence'
+          - type: 'null'
+      type: object
+      required:
+      - model_id
+      - model_version
+      - model_digest
+      - detector_id
+      - liveness_type
+      - score
+      - score_aggregation
+      - threshold
+      - threshold_calibrated
+      - calibration_id
+      - margin
+      - decision
+      - decision_reason
+      title: DecisionEvidence
+      description: 'Bounded, fixed-shape explanation of how the decision was reached.
+
+
+        Contains identifiers and scalars only: never image bytes, crops, embeddings or tensors.'
     DecisionPolicy:
       properties:
         score:
@@ -298,6 +694,19 @@ components:
       - threshold_calibrated
       - calibration_id
       title: DecisionPolicy
+    DecisionReason:
+      type: string
+      enum:
+      - score_at_or_above_threshold
+      - score_below_threshold
+      title: DecisionReason
+    EntryStatus:
+      type: string
+      enum:
+      - active
+      - installed
+      - invalid
+      title: EntryStatus
     ErrorBody:
       properties:
         code:
@@ -357,6 +766,15 @@ components:
       - height
       - detection_score
       title: FaceRegion
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
     HealthResponse:
       properties:
         status:
@@ -397,6 +815,12 @@ components:
         max_image_pixels:
           type: integer
           title: Max Image Pixels
+        max_image_side_px:
+          type: integer
+          title: Max Image Side Px
+        max_decoded_bytes:
+          type: integer
+          title: Max Decoded Bytes
         min_image_side_px:
           type: integer
           title: Min Image Side Px
@@ -413,6 +837,8 @@ components:
       - formats
       - max_image_bytes
       - max_image_pixels
+      - max_image_side_px
+      - max_decoded_bytes
       - min_image_side_px
       - min_face_size_px
       title: InputLimits
@@ -481,6 +907,8 @@ components:
           const: false
           title: Image Persisted
           default: false
+        evidence:
+          $ref: '#/components/schemas/DecisionEvidence'
       type: object
       required:
       - request_id
@@ -495,6 +923,7 @@ components:
       - model
       - image
       - processing_ms
+      - evidence
       title: LivenessCheckResponse
     MethodInfo:
       properties:
@@ -512,13 +941,29 @@ components:
     ModelInfo:
       properties:
         id:
-          type: string
+          anyOf:
+          - type: string
+          - type: 'null'
           title: Id
+        version:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Version
+        manifest_sha256:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Manifest Sha256
         detector:
-          type: string
+          anyOf:
+          - type: string
+          - type: 'null'
           title: Detector
         license:
-          type: string
+          anyOf:
+          - type: string
+          - type: 'null'
           title: License
         artifacts:
           items:
@@ -528,6 +973,8 @@ components:
       type: object
       required:
       - id
+      - version
+      - manifest_sha256
       - detector
       - license
       - artifacts
@@ -555,6 +1002,92 @@ components:
       - threshold_calibrated
       - calibration_id
       title: ModelRef
+    ModelRegistryResponse:
+      properties:
+        active_version:
+          type: string
+          title: Active Version
+          description: Configured active version.
+        active_ready:
+          type: boolean
+          title: Active Ready
+        active_error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Active Error
+        models:
+          items:
+            $ref: '#/components/schemas/ModelVersionOut'
+          type: array
+          title: Models
+      type: object
+      required:
+      - active_version
+      - active_ready
+      - active_error
+      - models
+      title: ModelRegistryResponse
+    ModelVersionOut:
+      properties:
+        model_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Model Id
+        version:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Version
+        status:
+          $ref: '#/components/schemas/EntryStatus'
+        source:
+          type: string
+          title: Source
+          description: '`builtin` or `registry/<file>.json`.'
+        liveness_type:
+          anyOf:
+          - type: string
+            const: passive
+          - type: 'null'
+          title: Liveness Type
+        manifest_sha256:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Manifest Sha256
+        digests_verified:
+          type: boolean
+          title: Digests Verified
+        error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Error
+        license:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: License
+        artifacts:
+          items:
+            $ref: '#/components/schemas/ArtifactOut'
+          type: array
+          title: Artifacts
+      type: object
+      required:
+      - model_id
+      - version
+      - status
+      - source
+      - liveness_type
+      - manifest_sha256
+      - digests_verified
+      - error
+      - license
+      - artifacts
+      title: ModelVersionOut
     ReadinessResponse:
       properties:
         status:
@@ -573,6 +1106,31 @@ components:
       - status
       - checks
       title: ReadinessResponse
+    ResourceLimits:
+      properties:
+        max_concurrent_checks:
+          type: integer
+          title: Max Concurrent Checks
+        max_queued_checks:
+          type: integer
+          title: Max Queued Checks
+        busy_timeout_seconds:
+          type: number
+          title: Busy Timeout Seconds
+        request_timeout_seconds:
+          type: number
+          title: Request Timeout Seconds
+        max_request_bytes:
+          type: integer
+          title: Max Request Bytes
+      type: object
+      required:
+      - max_concurrent_checks
+      - max_queued_checks
+      - busy_timeout_seconds
+      - request_timeout_seconds
+      - max_request_bytes
+      title: ResourceLimits
     StatusResponse:
       properties:
         service:
@@ -595,6 +1153,11 @@ components:
         uptime_seconds:
           type: number
           title: Uptime Seconds
+        active_model_version:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Active Model Version
       type: object
       required:
       - service
@@ -603,4 +1166,31 @@ components:
       - ready
       - reason
       - uptime_seconds
+      - active_model_version
       title: StatusResponse
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+        input:
+          title: Input
+        ctx:
+          type: object
+          title: Context
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError

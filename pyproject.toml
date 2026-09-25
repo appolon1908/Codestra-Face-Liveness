@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codestra-face-liveness"
-version = "0.2.0"
+version = "0.3.0"
 description = "Standalone passive face liveness / presentation-attack-detection service"
 requires-python = ">=3.12"
 license = "Apache-2.0"
@@ -25,6 +25,7 @@ dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.6", "mypy>=1.11", "pyyaml>=6"]
 
 [project.scripts]
 face-liveness = "face_liveness.main:main"
+face-liveness-calibrate = "face_liveness.calibration:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

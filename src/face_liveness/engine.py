@@ -21,9 +21,15 @@ class Decision(StrEnum):
     SPOOF = "spoof"
 
 
+class DecisionReason(StrEnum):
+    SCORE_AT_OR_ABOVE_THRESHOLD = "score_at_or_above_threshold"
+    SCORE_BELOW_THRESHOLD = "score_below_threshold"
+
+
 @dataclass(frozen=True, slots=True)
 class LivenessResult:
     decision: Decision
+    reason: DecisionReason
     live_score: float
     threshold: float
     face: FaceBox
@@ -79,9 +85,13 @@ class LivenessEngine:
         if not 0.0 <= live_score <= 1.0:
             raise LivenessError(ErrorCode.INFERENCE_FAILED, "liveness score out of range")
         threshold = self.settings.live_threshold
-        decision = Decision.LIVE if live_score >= threshold else Decision.SPOOF
+        if live_score >= threshold:
+            decision, reason = Decision.LIVE, DecisionReason.SCORE_AT_OR_ABOVE_THRESHOLD
+        else:
+            decision, reason = Decision.SPOOF, DecisionReason.SCORE_BELOW_THRESHOLD
         return LivenessResult(
             decision=decision,
+            reason=reason,
             live_score=live_score,
             threshold=threshold,
             face=face,

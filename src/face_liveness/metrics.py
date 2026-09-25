@@ -47,4 +47,36 @@ class Metrics:
         self.threshold = Gauge(
             "liveness_threshold", "Configured live-score threshold.", registry=self.registry
         )
+        self.rejections = Counter(
+            "liveness_rejections_total",
+            "Requests rejected without an assessment, by route template, stage and error code.",
+            ["route", "stage", "code"],
+            registry=self.registry,
+        )
+        self.challenges = Counter(
+            "liveness_challenges_total",
+            "Challenge lifecycle events (issued, consumed, or a rejection error code).",
+            ["event"],
+            registry=self.registry,
+        )
+        self.challenges_outstanding = Gauge(
+            "liveness_challenges_outstanding",
+            "Issued, unexpired challenges held in memory (consumed ones included until expiry).",
+            registry=self.registry,
+        )
+        self.checks_in_flight = Gauge(
+            "liveness_checks_in_flight",
+            "Checks currently holding an admission slot.",
+            registry=self.registry,
+        )
+        self.checks_waiting = Gauge(
+            "liveness_checks_waiting",
+            "Checks currently waiting for an admission slot.",
+            registry=self.registry,
+        )
+        self.active_model = Info(
+            "liveness_active_model",
+            "Active model version and manifest digest.",
+            registry=self.registry,
+        )
         self.build = Info("liveness_build", "Service and model identity.", registry=self.registry)

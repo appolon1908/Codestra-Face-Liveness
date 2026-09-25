@@ -13,6 +13,12 @@ services:
       # Token is mounted as a file (in production, rendered by an OpenBao agent).
       LIVENESS_API_TOKEN_FILE: /run/secrets/liveness_api_token
       LIVENESS_REQUIRE_AUTH: ${LIVENESS_REQUIRE_AUTH:-false}
+      # Resource guards: keep request_timeout below Middleware V3's upstream timeout.
+      LIVENESS_MAX_CONCURRENT_CHECKS: ${LIVENESS_MAX_CONCURRENT_CHECKS:-4}
+      LIVENESS_MAX_QUEUED_CHECKS: ${LIVENESS_MAX_QUEUED_CHECKS:-8}
+      LIVENESS_REQUEST_TIMEOUT_SECONDS: ${LIVENESS_REQUEST_TIMEOUT_SECONDS:-10}
+      # Empty = built-in model version baked into the image.
+      LIVENESS_ACTIVE_MODEL_VERSION: ${LIVENESS_ACTIVE_MODEL_VERSION:-}
     secrets:
       - liveness_api_token
     ports:
@@ -23,6 +29,10 @@ services:
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
+    # Additional model versions (manifests + artifacts) can be mounted read-only, e.g.:
+    # volumes:
+    #   - ./models/registry:/models/registry:ro
+    #   - ./models/v2:/models/v2:ro
     mem_limit: 1g
     restart: unless-stopped
 

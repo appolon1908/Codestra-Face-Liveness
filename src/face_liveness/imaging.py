@@ -16,6 +16,30 @@ from .errors import ErrorCode, LivenessError
 
 ALLOWED_FORMATS: dict[str, str] = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
 
+# Bytes per pixel of the decoded bitmap for the modes JPEG/PNG/WebP decode to. Unknown
+# modes are assumed to be the widest (32-bit single band or 4 x 8-bit).
+_MODE_BYTES: dict[str, int] = {
+    "1": 1,
+    "L": 1,
+    "P": 1,
+    "LA": 2,
+    "PA": 2,
+    "I;16": 2,
+    "I;16B": 2,
+    "RGB": 3,
+    "YCbCr": 3,
+    "RGBA": 4,
+    "RGBX": 4,
+    "CMYK": 4,
+    "I": 4,
+    "F": 4,
+}
+
+
+def decoded_size_bytes(width: int, height: int, mode: str) -> int:
+    """Peak bitmap memory: decoded frame + RGB conversion + two 3-byte numpy copies."""
+    return width * height * (_MODE_BYTES.get(mode, 4) + 9)
+
 
 @dataclass(frozen=True, slots=True)
 class DecodedImage:
@@ -49,7 +73,20 @@ def decode_base64(data: str, max_bytes: int) -> bytes:
     return raw
 
 
-def decode_image(raw: bytes, *, max_pixels: int, min_side: int) -> DecodedImage:
+def decode_image(
+    raw: bytes,
+    *,
+    max_pixels: int,
+    min_side: int,
+    max_side: int = 65_535,
+    max_decoded_bytes: int | None = None,
+) -> DecodedImage:
+    """Decode an image entirely in memory.
+
+    Dimension, pixel-count and decoded-size limits are enforced from the header, before
+    any pixel data is decompressed, so small "decompression bomb" inputs are rejected
+    without allocating their bitmap.
+    """
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
@@ -61,9 +98,19 @@ def decode_image(raw: bytes, *, max_pixels: int, min_side: int) -> DecodedImage:
                     f"unsupported image format {fmt or 'unknown'}; allowed: JPEG, PNG, WEBP",
                 )
             width, height = img.size
+            if max(width, height) > max_side:
+                raise LivenessError(ErrorCode.PAYLOAD_TOO_LARGE, f"image side exceeds {max_side}px")
             if width * height > max_pixels:
                 raise LivenessError(
                     ErrorCode.PAYLOAD_TOO_LARGE, f"image exceeds {max_pixels} pixels"
+                )
+            if (
+                max_decoded_bytes is not None
+                and decoded_size_bytes(width, height, img.mode) > max_decoded_bytes
+            ):
+                raise LivenessError(
+                    ErrorCode.PAYLOAD_TOO_LARGE,
+                    f"decoded image would exceed {max_decoded_bytes} bytes",
                 )
             if getattr(img, "n_frames", 1) > 1:
                 raise LivenessError(
