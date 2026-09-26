@@ -10,7 +10,7 @@ import uuid
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from threading import Lock
 from typing import Any
 
@@ -250,9 +250,7 @@ def create_app(
         ttl_seconds=settings.challenge_ttl_seconds,
         capacity=settings.max_outstanding_challenges,
     )
-    evidence_store: deque[tuple[str, LivenessEvidenceSummary]] = deque(
-        maxlen=_EVIDENCE_STORE_LIMIT
-    )
+    evidence_store: deque[tuple[str, LivenessEvidenceSummary]] = deque(maxlen=_EVIDENCE_STORE_LIMIT)
     evidence_lock = Lock()
     metrics.checks_in_flight.set_function(lambda: admission.in_flight)
     metrics.checks_waiting.set_function(lambda: admission.waiting)
@@ -349,7 +347,7 @@ def create_app(
         summary = LivenessEvidenceSummary(
             evidence_ref=evidence_ref,
             request_id=response.request_id,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
             decision=response.decision,
             is_live=response.is_live,
             live_score=response.live_score,
@@ -990,7 +988,9 @@ def create_app(
         tenant = _tenant(tenant_id, required=True)
         assert tenant is not None
         with evidence_lock:
-            matching = [summary for stored_tenant, summary in evidence_store if stored_tenant == tenant]
+            matching = [
+                summary for stored_tenant, summary in evidence_store if stored_tenant == tenant
+            ]
         matching.reverse()
         items = matching[offset : offset + limit]
         return LivenessEvidencePage(
