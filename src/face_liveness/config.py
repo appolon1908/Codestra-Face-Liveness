@@ -1,0 +1,155 @@
+"""Service configuration, sourced exclusively from environment variables.
+
+Secrets are never given defaults and are never committed. The API token is read from a
+file reference (``LIVENESS_API_TOKEN_FILE``, e.g. rendered by an OpenBao agent) or, for
+local development only, from ``LIVENESS_API_TOKEN``.
+"""
+
+from __future__ import annotations
+
+from enum import StrEnum
+from functools import cached_property
+from pathlib import Path
+
+from pydantic import Field, SecretStr, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Known-good SHA-256 digests of the runtime model artifacts produced by
+# tools/fetch_models.sh + tools/convert_minifasnet.py (see docs/MODEL_CARD.md).
+YUNET_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
+MINIFASNET_V2_SHA256 = "98587ea6a3315f4d0bfcfb9b247ab7f724f3b63ae05f4a0b5a1fd53f414b4571"
+MINIFASNET_V1SE_SHA256 = "09e486ea92376a13a50f943ca2a5b41a3c7d4d6b1761c8e87c63eb1205fefb1a"
+
+
+class Environment(StrEnum):
+    DEVELOPMENT = "development"
+    TEST = "test"
+    PRODUCTION = "production"
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="LIVENESS_", extra="ignore")
+
+    env: Environment = Environment.DEVELOPMENT
+    log_level: str = "INFO"
+
+    # Model artifacts
+    model_dir: Path = Path("/models")
+    detector_file: str = "face_detection_yunet_2023mar.onnx"
+    detector_sha256: str = YUNET_SHA256
+    minifasnet_v2_file: str = "minifasnet_v2_2.7_80x80.onnx"
+    minifasnet_v2_sha256: str = MINIFASNET_V2_SHA256
+    minifasnet_v1se_file: str = "minifasnet_v1se_4.0_80x80.onnx"
+    minifasnet_v1se_sha256: str = MINIFASNET_V1SE_SHA256
+    # Model registry: additional installed versions are described by manifests in
+    # <model_registry_dir>/*.json (default <model_dir>/registry). Exactly one version is
+    # active; empty means the built-in version described by the settings above.
+    model_registry_dir: Path | None = None
+    active_model_version: str = ""
+    # When true, a digest mismatch keeps the service not-ready (fail closed).
+    # Forced on in production.
+    verify_model_digests: bool = True
+    # When true, a non-built-in active version must have a passing validation record
+    # (digest + smoke + calibration reference; see promotion.py) whose calibration id
+    # equals threshold_calibration_id. Default: true in production, false otherwise.
+    require_model_validation: bool | None = None
+    onnx_intra_op_threads: int = Field(default=2, ge=1, le=64)
+    # Concurrent checks per process; excess requests wait up to busy_timeout_seconds
+    # and then get a retryable 503 BUSY. At most max_queued_checks requests may wait;
+    # beyond that, requests are rejected immediately.
+    max_concurrent_checks: int = Field(default=4, ge=1, le=256)
+    max_queued_checks: int = Field(default=8, ge=0, le=1024)
+    busy_timeout_seconds: float = Field(default=2.0, ge=0.0, le=60.0)
+    # Total server-side budget for one check (queueing + decode + inference). A check
+    # that exceeds it returns a retryable 503 DEADLINE_EXCEEDED, never a late decision.
+    request_timeout_seconds: float = Field(default=10.0, gt=0.0, le=120.0)
+
+    # Challenge contract (freshness / replay prevention; NOT active liveness)
+    challenge_ttl_seconds: int = Field(default=120, ge=10, le=900)
+    max_outstanding_challenges: int = Field(default=10_000, ge=1, le=1_000_000)
+
+    # Active liveness provider id (see active.py). Empty = none. No provider ships with
+    # this service, so any non-empty value fails closed until a tested one is added.
+    active_provider: str = ""
+    # Upper bound on frames in one active capture (only used when a provider is available).
+    max_active_frames: int = Field(default=8, ge=1, le=32)
+    # Versioned score-fusion policy (see fusion.py). Unknown ids fail closed.
+    fusion_policy_id: str = "passive-only.v1"
+
+    # Opaque id of the benchmark report whose capacity profile this deployment's
+    # concurrency/timeout settings were taken from. Informational only: the service never
+    # reads benchmark reports and never tunes itself.
+    capacity_profile_id: str = Field(default="", max_length=128)
+
+    # Decision policy
+    live_threshold: float = Field(default=0.85, gt=0.0, lt=1.0)
+    # Opaque identifier of the calibration run that produced live_threshold.
+    # Empty means the threshold is the uncalibrated provisional default.
+    threshold_calibration_id: str = ""
+
+    # Face detection / quality gates
+    detector_score_threshold: float = Field(default=0.8, gt=0.0, lt=1.0)
+    detector_max_side: int = Field(default=640, ge=160, le=4096)
+    min_face_size_px: int = Field(default=64, ge=16)
+    # Secondary faces smaller than this fraction of the primary face's area are ignored
+    # (e.g. a tiny face on a badge in the background). 0 disables tolerance entirely.
+    secondary_face_area_ratio: float = Field(default=0.0, ge=0.0, lt=1.0)
+
+    # Input limits
+    max_image_bytes: int = Field(default=5 * 1024 * 1024, ge=1024)
+    max_image_pixels: int = Field(default=25_000_000, ge=10_000)
+    max_image_side_px: int = Field(default=8192, ge=128, le=65_535)
+    # Upper bound on peak bitmap memory for one decode (checked from the header, before
+    # any pixel data is decompressed). 192 MiB admits ~16 MP RGB (12 MP phone photos).
+    max_decoded_bytes: int = Field(default=192 * 1024 * 1024, ge=64 * 1024)
+    min_image_side_px: int = Field(default=112, ge=32)
+
+    # Caller authentication (the only expected caller is Middleware V3)
+    api_token: SecretStr | None = None
+    api_token_file: Path | None = None
+    require_auth: bool | None = None  # default: True in production, False otherwise
+
+    @model_validator(mode="after")
+    def _production_guards(self) -> Settings:
+        if self.env is Environment.PRODUCTION:
+            self.verify_model_digests = True
+            if self.api_token is not None:
+                raise ValueError(
+                    "LIVENESS_API_TOKEN is development-only; "
+                    "use LIVENESS_API_TOKEN_FILE in production"
+                )
+        return self
+
+    @property
+    def model_validation_required(self) -> bool:
+        if self.env is Environment.PRODUCTION:
+            return True
+        return bool(self.require_model_validation)
+
+    @property
+    def auth_required(self) -> bool:
+        if self.require_auth is not None:
+            return self.require_auth
+        return self.env is Environment.PRODUCTION
+
+    @cached_property
+    def resolved_api_token(self) -> str | None:
+        """Token from file reference (preferred) or env. None if unset/unreadable."""
+        if self.api_token_file is not None:
+            try:
+                token = self.api_token_file.read_text(encoding="utf-8").strip()
+            except OSError:
+                return None
+            return token or None
+        if self.api_token is not None:
+            return self.api_token.get_secret_value() or None
+        return None
+
+    @property
+    def resolved_model_registry_dir(self) -> Path:
+        return self.model_registry_dir or self.model_dir / "registry"
+
+    @property
+    def max_request_bytes(self) -> int:
+        # base64 inflates by 4/3; allow headroom for the JSON envelope.
+        return (self.max_image_bytes * 4) // 3 + 16 * 1024

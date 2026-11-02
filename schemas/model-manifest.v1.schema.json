@@ -1,0 +1,150 @@
+{
+  "$defs": {
+    "ClassifierSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "architecture": {
+          "const": "minifasnet",
+          "title": "Architecture",
+          "type": "string"
+        },
+        "crop_scale": {
+          "description": "Context crop scale around the face.",
+          "maximum": 8.0,
+          "minimum": 1.0,
+          "title": "Crop Scale",
+          "type": "number"
+        },
+        "file": {
+          "description": "Path relative to the model dir.",
+          "maxLength": 255,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._\\-]*(/[A-Za-z0-9][A-Za-z0-9._\\-]*)*$",
+          "title": "File",
+          "type": "string"
+        },
+        "name": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+\\-]{0,63}$",
+          "title": "Name",
+          "type": "string"
+        },
+        "sha256": {
+          "description": "Lower-case hex SHA-256.",
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "file",
+        "sha256",
+        "architecture",
+        "crop_scale"
+      ],
+      "title": "ClassifierSpec",
+      "type": "object"
+    },
+    "DetectorSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "architecture": {
+          "const": "yunet",
+          "title": "Architecture",
+          "type": "string"
+        },
+        "file": {
+          "description": "Path relative to the model dir.",
+          "maxLength": 255,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._\\-]*(/[A-Za-z0-9][A-Za-z0-9._\\-]*)*$",
+          "title": "File",
+          "type": "string"
+        },
+        "name": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+\\-]{0,63}$",
+          "title": "Name",
+          "type": "string"
+        },
+        "sha256": {
+          "description": "Lower-case hex SHA-256.",
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "file",
+        "sha256",
+        "architecture"
+      ],
+      "title": "DetectorSpec",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "A single installed model version (schema version 1).",
+  "properties": {
+    "classifiers": {
+      "items": {
+        "$ref": "#/$defs/ClassifierSpec"
+      },
+      "maxItems": 8,
+      "minItems": 1,
+      "title": "Classifiers",
+      "type": "array"
+    },
+    "description": {
+      "default": "",
+      "maxLength": 500,
+      "title": "Description",
+      "type": "string"
+    },
+    "detector": {
+      "$ref": "#/$defs/DetectorSpec"
+    },
+    "license": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "License",
+      "type": "string"
+    },
+    "liveness_type": {
+      "const": "passive",
+      "description": "Only passive single-image PAD is supported by this schema version.",
+      "title": "Liveness Type",
+      "type": "string"
+    },
+    "model_id": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._+\\-]{0,63}$",
+      "title": "Model Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "score_aggregation": {
+      "const": "mean_live_probability",
+      "title": "Score Aggregation",
+      "type": "string"
+    },
+    "version": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._+\\-]{0,63}$",
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "model_id",
+    "version",
+    "liveness_type",
+    "score_aggregation",
+    "detector",
+    "classifiers",
+    "license"
+  ],
+  "title": "ModelManifest",
+  "type": "object"
+}

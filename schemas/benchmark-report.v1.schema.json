@@ -1,0 +1,306 @@
+{
+  "$defs": {
+    "BenchmarkSettings": {
+      "properties": {
+        "detector_max_side": {
+          "title": "Detector Max Side",
+          "type": "integer"
+        },
+        "max_concurrent_checks": {
+          "title": "Max Concurrent Checks",
+          "type": "integer"
+        },
+        "max_decoded_bytes": {
+          "title": "Max Decoded Bytes",
+          "type": "integer"
+        },
+        "max_image_bytes": {
+          "title": "Max Image Bytes",
+          "type": "integer"
+        },
+        "onnx_intra_op_threads": {
+          "title": "Onnx Intra Op Threads",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "onnx_intra_op_threads",
+        "max_concurrent_checks",
+        "detector_max_side",
+        "max_image_bytes",
+        "max_decoded_bytes"
+      ],
+      "title": "BenchmarkSettings",
+      "type": "object"
+    },
+    "HostInfo": {
+      "properties": {
+        "cpu_affinity": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Cpu Affinity"
+        },
+        "cpu_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Cpu Count"
+        },
+        "machine": {
+          "title": "Machine",
+          "type": "string"
+        },
+        "onnxruntime": {
+          "title": "Onnxruntime",
+          "type": "string"
+        },
+        "platform": {
+          "title": "Platform",
+          "type": "string"
+        },
+        "python": {
+          "title": "Python",
+          "type": "string"
+        }
+      },
+      "required": [
+        "platform",
+        "machine",
+        "python",
+        "cpu_count",
+        "cpu_affinity",
+        "onnxruntime"
+      ],
+      "title": "HostInfo",
+      "type": "object"
+    },
+    "LatencySummary": {
+      "properties": {
+        "max_ms": {
+          "title": "Max Ms",
+          "type": "number"
+        },
+        "mean_ms": {
+          "title": "Mean Ms",
+          "type": "number"
+        },
+        "p50_ms": {
+          "title": "P50 Ms",
+          "type": "number"
+        },
+        "p95_ms": {
+          "title": "P95 Ms",
+          "type": "number"
+        },
+        "p99_ms": {
+          "title": "P99 Ms",
+          "type": "number"
+        }
+      },
+      "required": [
+        "p50_ms",
+        "p95_ms",
+        "p99_ms",
+        "mean_ms",
+        "max_ms"
+      ],
+      "title": "LatencySummary",
+      "type": "object"
+    },
+    "ModelIdentity": {
+      "properties": {
+        "manifest_sha256": {
+          "title": "Manifest Sha256",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "manifest_sha256"
+      ],
+      "title": "ModelIdentity",
+      "type": "object"
+    },
+    "RunResult": {
+      "properties": {
+        "concurrency": {
+          "title": "Concurrency",
+          "type": "integer"
+        },
+        "cpu_seconds": {
+          "title": "Cpu Seconds",
+          "type": "number"
+        },
+        "cpu_utilisation": {
+          "description": "Process CPU seconds / wall seconds (cores).",
+          "title": "Cpu Utilisation",
+          "type": "number"
+        },
+        "errors": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "description": "Requests that failed, by error code.",
+          "title": "Errors",
+          "type": "object"
+        },
+        "faces_detected_rate": {
+          "title": "Faces Detected Rate",
+          "type": "number"
+        },
+        "height": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Height"
+        },
+        "image": {
+          "description": "`<width>x<height>` or `mixed` for a --images corpus.",
+          "title": "Image",
+          "type": "string"
+        },
+        "latency": {
+          "$ref": "#/$defs/LatencySummary"
+        },
+        "payload_bytes": {
+          "title": "Payload Bytes",
+          "type": "integer"
+        },
+        "requests": {
+          "title": "Requests",
+          "type": "integer"
+        },
+        "rss_peak_mib": {
+          "description": "Process peak resident set size so far.",
+          "title": "Rss Peak Mib",
+          "type": "number"
+        },
+        "throughput_rps": {
+          "title": "Throughput Rps",
+          "type": "number"
+        },
+        "width": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Width"
+        }
+      },
+      "required": [
+        "image",
+        "width",
+        "height",
+        "payload_bytes",
+        "concurrency",
+        "requests",
+        "errors",
+        "faces_detected_rate",
+        "latency",
+        "throughput_rps",
+        "cpu_seconds",
+        "cpu_utilisation",
+        "rss_peak_mib"
+      ],
+      "title": "RunResult",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "auto_tuned": {
+      "const": false,
+      "default": false,
+      "description": "Always false: the service never applies benchmark results.",
+      "title": "Auto Tuned",
+      "type": "boolean"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "host": {
+      "$ref": "#/$defs/HostInfo"
+    },
+    "model": {
+      "$ref": "#/$defs/ModelIdentity"
+    },
+    "profile_id": {
+      "title": "Profile Id",
+      "type": "string"
+    },
+    "report_type": {
+      "const": "face_liveness_benchmark",
+      "title": "Report Type",
+      "type": "string"
+    },
+    "runs": {
+      "items": {
+        "$ref": "#/$defs/RunResult"
+      },
+      "title": "Runs",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "scope": {
+      "const": "in_process_pipeline",
+      "default": "in_process_pipeline",
+      "description": "base64 + decode + detect + classify; excludes HTTP, auth and network.",
+      "title": "Scope",
+      "type": "string"
+    },
+    "settings": {
+      "$ref": "#/$defs/BenchmarkSettings"
+    },
+    "tool_version": {
+      "title": "Tool Version",
+      "type": "string"
+    },
+    "warmup_requests": {
+      "title": "Warmup Requests",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "report_type",
+    "profile_id",
+    "created_at",
+    "tool_version",
+    "model",
+    "host",
+    "settings",
+    "warmup_requests",
+    "runs"
+  ],
+  "title": "BenchmarkReport",
+  "type": "object"
+}
